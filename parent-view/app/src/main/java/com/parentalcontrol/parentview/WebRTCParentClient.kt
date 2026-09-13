@@ -22,6 +22,7 @@ import org.webrtc.*
 class WebRTCParentClient(
     private val context: Context,
     private val deviceId: String,
+    private val pairingKey: String,
     private val renderer: SurfaceViewRenderer
 ) {
     private var factory: PeerConnectionFactory? = null
@@ -33,7 +34,7 @@ class WebRTCParentClient(
     private val signaling = SupabaseSignaling(
         supabaseUrl = BuildConfig.SUPABASE_URL,
         supabaseKey = BuildConfig.SUPABASE_KEY,
-        channelId   = "screen-$deviceId"
+        channelId   = "screen-$pairingKey-$deviceId"
     )
 
     private val iceServers = listOf(

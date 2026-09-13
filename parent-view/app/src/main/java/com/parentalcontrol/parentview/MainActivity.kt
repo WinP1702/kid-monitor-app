@@ -2,6 +2,8 @@ package com.parentalcontrol.parentview
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
@@ -13,7 +15,8 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Parent dashboard.
- * Lists ALL connected kid devices in real-time.
+ * Checks pairing key on start — redirects to PairingActivity if not set.
+ * Lists only the kid devices registered under the parent's pairing key.
  * Each card: device name, status, [📺 Live Screen] [📊 App Usage] [🗑 Remove]
  */
 class MainActivity : AppCompatActivity() {
@@ -22,18 +25,23 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvEmpty: TextView
     private lateinit var progressBar: ProgressBar
 
-    private val devicesRef = FirebaseDatabase.getInstance().getReference("devices")
+    private val prefs by lazy { getSharedPreferences(PairingActivity.PREFS_NAME, MODE_PRIVATE) }
+
+    private var devicesRef: DatabaseReference? = null
     private var devicesListener: ValueEventListener? = null
+    private var pairingKey: String = ""
 
     private val deviceAdapter = DeviceAdapter(
         onLiveScreen = { deviceId ->
             startActivity(Intent(this, LiveScreenActivity::class.java).apply {
                 putExtra("deviceId", deviceId)
+                putExtra("pairingKey", pairingKey)
             })
         },
         onAppUsage = { deviceId ->
             startActivity(Intent(this, AppUsageActivity::class.java).apply {
                 putExtra("deviceId", deviceId)
+                putExtra("pairingKey", pairingKey)
             })
         },
         onDelete = { deviceId, deviceName ->
@@ -43,6 +51,18 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Guard: redirect to pairing if no key saved
+        val savedKey = prefs.getString(PairingActivity.KEY_PAIRING_KEY, null)
+        if (savedKey.isNullOrBlank()) {
+            startActivity(Intent(this, PairingActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            })
+            finish()
+            return
+        }
+        pairingKey = savedKey
+
         setContentView(R.layout.activity_main)
         supportActionBar?.title = "👨‍👧 Parent Monitor"
 
@@ -56,9 +76,62 @@ class MainActivity : AppCompatActivity() {
         startListeningDevices()
     }
 
+    // ─── Options Menu (Change Key) ─────────────────────────────────────
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(Menu.NONE, MENU_CHANGE_KEY, Menu.NONE, "🔑 Change Pairing Key")
+            .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == MENU_CHANGE_KEY) {
+            showChangeKeyDialog()
+            return true
+        }
+        return super.onOptionsItemSelected(item)
+    }
+
+    private fun showChangeKeyDialog() {
+        val input = android.widget.EditText(this).apply {
+            hint = "New 8-character key"
+            filters = arrayOf(
+                android.text.InputFilter.AllCaps(),
+                android.text.InputFilter.LengthFilter(8)
+            )
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                        android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+            gravity = android.view.Gravity.CENTER
+            textSize = 20f
+            setPadding(48, 32, 48, 32)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Change Pairing Key")
+            .setMessage("Enter a new 8-character key to connect to a different kid device.")
+            .setView(input)
+            .setPositiveButton("Connect") { _, _ ->
+                val newKey = input.text.toString().trim().uppercase()
+                if (newKey.length == 8 && newKey.all { it.isLetterOrDigit() }) {
+                    prefs.edit().putString(PairingActivity.KEY_PAIRING_KEY, newKey).apply()
+                    // Restart activity to reload with new key
+                    startActivity(Intent(this, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    })
+                    finish()
+                } else {
+                    Toast.makeText(this, "Key must be exactly 8 letters/numbers", Toast.LENGTH_LONG).show()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ─── Firebase listener under pairing key namespace ─────────────────
     private fun startListeningDevices() {
         progressBar.visibility = View.VISIBLE
-        devicesListener = devicesRef.addValueEventListener(object : ValueEventListener {
+        devicesRef = FirebaseDatabase.getInstance().getReference("users/$pairingKey/devices")
+
+        devicesListener = devicesRef!!.addValueEventListener(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 progressBar.visibility = View.GONE
                 val devices = mutableListOf<DeviceItem>()
@@ -80,6 +153,7 @@ class MainActivity : AppCompatActivity() {
                 if (devices.isEmpty()) {
                     tvEmpty.visibility   = View.VISIBLE
                     rvDevices.visibility = View.GONE
+                    tvEmpty.text = "No devices found for key: $pairingKey\n\nMake sure the Kid Monitor app is running on the child's phone."
                 } else {
                     tvEmpty.visibility   = View.GONE
                     rvDevices.visibility = View.VISIBLE
@@ -100,11 +174,11 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Remove Device")
             .setMessage("Remove \"$deviceName\" from the list?\n\nThis deletes all its data from the server. The Kid Monitor app on that phone will re-register next time it runs.")
             .setPositiveButton("Remove") { _, _ ->
-                devicesRef.child(deviceId).removeValue()
-                    .addOnSuccessListener {
+                devicesRef?.child(deviceId)?.removeValue()
+                    ?.addOnSuccessListener {
                         Toast.makeText(this, "✅ Device removed", Toast.LENGTH_SHORT).show()
                     }
-                    .addOnFailureListener { e ->
+                    ?.addOnFailureListener { e ->
                         Toast.makeText(this, "❌ Failed: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
             }
@@ -113,8 +187,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        devicesListener?.let { devicesRef.removeEventListener(it) }
+        devicesListener?.let { devicesRef?.removeEventListener(it) }
         super.onDestroy()
+    }
+
+    companion object {
+        private const val MENU_CHANGE_KEY = 1001
     }
 }
 

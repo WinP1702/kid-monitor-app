@@ -20,10 +20,10 @@ import java.util.*
  *   appUsage/     → per-day per-app usage stats
  *   events/       → foreground/background app events
  */
-class FirebaseManager(private val context: Context, private val deviceId: String) {
+class FirebaseManager(private val context: Context, private val deviceId: String, private val pairingKey: String) {
 
     private val db = FirebaseDatabase.getInstance()
-    private val deviceRef = db.getReference("devices/$deviceId")
+    private val deviceRef = db.getReference("users/$pairingKey/devices/$deviceId")
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 
     // ─── Device Registration ──────────────────────────────────────────

@@ -11,8 +11,9 @@
         android:theme="@style/Theme.ParentView"
         android:supportsRtl="true">
 
+        <!-- PairingActivity is the launcher — redirects to MainActivity after key entry -->
         <activity
-            android:name=".MainActivity"
+            android:name=".PairingActivity"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -20,6 +21,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".LiveScreenActivity"

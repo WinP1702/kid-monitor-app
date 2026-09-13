@@ -31,6 +31,7 @@ class LiveScreenActivity : AppCompatActivity() {
 
     private var deviceId: String = ""
     private var deviceName: String = ""
+    private var pairingKey: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,6 +40,11 @@ class LiveScreenActivity : AppCompatActivity() {
 
         deviceId   = intent.getStringExtra("deviceId")   ?: return
         deviceName = intent.getStringExtra("deviceName") ?: deviceId
+        pairingKey = intent.getStringExtra("pairingKey") ?: run {
+            // Fallback: read from prefs
+            getSharedPreferences(PairingActivity.PREFS_NAME, MODE_PRIVATE)
+                .getString(PairingActivity.KEY_PAIRING_KEY, "") ?: ""
+        }
 
         setupUI()
         startWebRTC()
@@ -58,9 +64,10 @@ class LiveScreenActivity : AppCompatActivity() {
 
     private fun startWebRTC() {
         webRTCClient = WebRTCParentClient(
-            context  = this,
-            deviceId = deviceId,
-            renderer = binding.surfaceViewRenderer
+            context    = this,
+            deviceId   = deviceId,
+            pairingKey = pairingKey,
+            renderer   = binding.surfaceViewRenderer
         )
 
         webRTCClient!!.onStatusChanged = { status ->

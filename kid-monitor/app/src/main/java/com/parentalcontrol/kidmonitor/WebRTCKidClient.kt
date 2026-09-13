@@ -22,7 +22,8 @@ import org.webrtc.*
 class WebRTCKidClient(
     private val context: Context,
     private val projectionData: Intent,   // Intent from MediaProjection permission grant
-    private val deviceId: String
+    private val deviceId: String,
+    private val pairingKey: String
 ) {
     private var factory: PeerConnectionFactory? = null
     private var pc: PeerConnection? = null
@@ -35,7 +36,7 @@ class WebRTCKidClient(
     private val signaling = SupabaseSignaling(
         supabaseUrl = BuildConfig.SUPABASE_URL,
         supabaseKey = BuildConfig.SUPABASE_KEY,
-        channelId   = "screen-$deviceId"
+        channelId   = "screen-$pairingKey-$deviceId"
     )
 
     private val iceServers = listOf(

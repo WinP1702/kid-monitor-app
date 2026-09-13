@@ -34,6 +34,14 @@ class MonitorService : LifecycleService() {
             prefs.edit().putString(SetupActivity.KEY_DEVICE_ID, it).apply()
         }
     }
+    private val pairingKey: String by lazy {
+        prefs.getString(SetupActivity.KEY_PAIRING_KEY, null) ?: run {
+            // Fallback: generate one if somehow missing
+            val key = UUID.randomUUID().toString().replace("-", "").take(8).uppercase()
+            prefs.edit().putString(SetupActivity.KEY_PAIRING_KEY, key).apply()
+            key
+        }
+    }
 
     companion object {
         var isRunning = false
@@ -64,7 +72,7 @@ class MonitorService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
-        firebaseManager = FirebaseManager(this, deviceId)
+        firebaseManager = FirebaseManager(this, deviceId, pairingKey)
         usageStatsHelper = UsageStatsHelper(this)
 
         createNotificationChannel()
@@ -125,7 +133,8 @@ class MonitorService : LifecycleService() {
         webRTCKidClient = WebRTCKidClient(
             context = applicationContext,
             projectionData = data,
-            deviceId = deviceId
+            deviceId = deviceId,
+            pairingKey = pairingKey
         )
         webRTCKidClient!!.start()
         Log.d(TAG, "WebRTC client started for device $deviceId")
@@ -138,7 +147,7 @@ class MonitorService : LifecycleService() {
                     firebaseManager.uploadUsageStats(stats)
                     // Update lastSeen heartbeat
                     FirebaseDatabase.getInstance()
-                        .getReference("devices/$deviceId/info/lastSeen")
+                        .getReference("users/$pairingKey/devices/$deviceId/info/lastSeen")
                         .setValue(System.currentTimeMillis())
                 } catch (e: Exception) {
                     Log.e(TAG, "Usage upload: ${e.message}")

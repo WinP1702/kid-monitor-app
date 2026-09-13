@@ -31,6 +31,7 @@ class AppUsageActivity : AppCompatActivity() {
 
     private val appAdapter = AppUsageAdapter()
     private var deviceId: String = ""
+    private var pairingKey: String = ""
     private val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -38,7 +39,11 @@ class AppUsageActivity : AppCompatActivity() {
         setContentView(R.layout.activity_app_usage)
         supportActionBar?.title = "📊 App Usage"
 
-        deviceId = intent.getStringExtra("deviceId") ?: run { finish(); return }
+        deviceId   = intent.getStringExtra("deviceId") ?: run { finish(); return }
+        pairingKey = intent.getStringExtra("pairingKey") ?: run {
+            getSharedPreferences(PairingActivity.PREFS_NAME, MODE_PRIVATE)
+                .getString(PairingActivity.KEY_PAIRING_KEY, "") ?: ""
+        }
 
         barChart = findViewById(R.id.barChart)
         rvApps = findViewById(R.id.rvApps)
@@ -87,7 +92,7 @@ class AppUsageActivity : AppCompatActivity() {
     private fun loadUsageData() {
         progressBar.visibility = View.VISIBLE
         val ref = FirebaseDatabase.getInstance()
-            .getReference("devices/$deviceId/appUsage/$today")
+            .getReference("users/$pairingKey/devices/$deviceId/appUsage/$today")
 
         ref.addListenerForSingleValueEvent(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
