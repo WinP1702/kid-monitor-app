@@ -7,28 +7,35 @@ import android.text.InputType
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
-import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import org.json.JSONArray
 
 /**
- * First-launch screen that asks the parent to enter the 8-character pairing key
- * from the Kid Monitor device. Once saved, MainActivity takes over.
+ * Shown when the parent has NO paired devices yet (fresh install or all removed).
+ * Adds the entered key to the set of paired keys and goes to MainActivity.
  *
- * The key is stored in SharedPreferences. Parent can change it via
- * MainActivity's menu → "Change Pairing Key".
+ * Keys are stored as a JSON array in SharedPreferences so multiple kid devices
+ * (each with their own unique key) can be monitored simultaneously.
  */
 class PairingActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // If we already have at least one key, skip straight to MainActivity
+        if (getSavedKeys().isNotEmpty()) {
+            goToMain()
+            return
+        }
+
         setContentView(R.layout.activity_pairing)
         supportActionBar?.hide()
 
-        val etKey    = findViewById<EditText>(R.id.etPairingKey)
+        val etKey      = findViewById<EditText>(R.id.etPairingKey)
         val btnConnect = findViewById<Button>(R.id.btnConnect)
-        val tvError  = findViewById<TextView>(R.id.tvError)
+        val tvError    = findViewById<TextView>(R.id.tvError)
 
         // Force uppercase, max 8 chars
         etKey.filters = arrayOf(
@@ -50,20 +57,21 @@ class PairingActivity : AppCompatActivity() {
                 }
                 else -> {
                     tvError.visibility = View.GONE
-                    savePairingKey(key)
+                    addKey(key)
                 }
             }
         }
     }
 
-    private fun savePairingKey(key: String) {
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .edit()
-            .putString(KEY_PAIRING_KEY, key)
-            .apply()
+    private fun addKey(key: String) {
+        val keys = getSavedKeys().toMutableSet()
+        keys.add(key)
+        saveKeys(keys)
+        Toast.makeText(this, "✅ Device added! Loading...", Toast.LENGTH_SHORT).show()
+        goToMain()
+    }
 
-        Toast.makeText(this, "✅ Paired! Loading devices...", Toast.LENGTH_SHORT).show()
-
+    private fun goToMain() {
         startActivity(Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         })
@@ -71,7 +79,31 @@ class PairingActivity : AppCompatActivity() {
     }
 
     companion object {
-        const val PREFS_NAME    = "parent_prefs"
-        const val KEY_PAIRING_KEY = "pairing_key"
+        const val PREFS_NAME       = "parent_prefs"
+        const val KEY_PAIRING_KEYS = "pairing_keys_json"   // JSON array of keys
+
+        /** Returns the set of all saved pairing keys */
+        fun getSavedKeys(prefs: android.content.SharedPreferences): Set<String> {
+            val json = prefs.getString(KEY_PAIRING_KEYS, null) ?: return emptySet()
+            return try {
+                val arr = JSONArray(json)
+                (0 until arr.length()).map { arr.getString(it) }.toSet()
+            } catch (e: Exception) {
+                emptySet()
+            }
+        }
+
+        /** Persists the set of pairing keys */
+        fun saveKeys(prefs: android.content.SharedPreferences, keys: Set<String>) {
+            val arr = JSONArray(keys.toList())
+            prefs.edit().putString(KEY_PAIRING_KEYS, arr.toString()).apply()
+        }
     }
+
+    // Instance helpers that use this activity's own prefs
+    private fun getSavedKeys(): Set<String> =
+        getSavedKeys(getSharedPreferences(PREFS_NAME, MODE_PRIVATE))
+
+    private fun saveKeys(keys: Set<String>) =
+        saveKeys(getSharedPreferences(PREFS_NAME, MODE_PRIVATE), keys)
 }

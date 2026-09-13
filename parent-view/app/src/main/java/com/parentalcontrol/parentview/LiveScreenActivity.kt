@@ -40,11 +40,7 @@ class LiveScreenActivity : AppCompatActivity() {
 
         deviceId   = intent.getStringExtra("deviceId")   ?: return
         deviceName = intent.getStringExtra("deviceName") ?: deviceId
-        pairingKey = intent.getStringExtra("pairingKey") ?: run {
-            // Fallback: read from prefs
-            getSharedPreferences(PairingActivity.PREFS_NAME, MODE_PRIVATE)
-                .getString(PairingActivity.KEY_PAIRING_KEY, "") ?: ""
-        }
+        pairingKey = intent.getStringExtra("pairingKey") ?: ""
 
         setupUI()
         startWebRTC()

@@ -40,10 +40,7 @@ class AppUsageActivity : AppCompatActivity() {
         supportActionBar?.title = "📊 App Usage"
 
         deviceId   = intent.getStringExtra("deviceId") ?: run { finish(); return }
-        pairingKey = intent.getStringExtra("pairingKey") ?: run {
-            getSharedPreferences(PairingActivity.PREFS_NAME, MODE_PRIVATE)
-                .getString(PairingActivity.KEY_PAIRING_KEY, "") ?: ""
-        }
+        pairingKey = intent.getStringExtra("pairingKey") ?: ""
 
         barChart = findViewById(R.id.barChart)
         rvApps = findViewById(R.id.rvApps)
