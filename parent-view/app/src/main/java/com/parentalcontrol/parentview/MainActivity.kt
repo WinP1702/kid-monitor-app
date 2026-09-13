@@ -44,8 +44,14 @@ class MainActivity : AppCompatActivity() {
     private val deviceAdapter = DeviceAdapter(
         onLiveScreen = { deviceId, pairingKey ->
             startActivity(Intent(this, LiveScreenActivity::class.java).apply {
-                putExtra("deviceId", deviceId)
-                putExtra("pairingKey", pairingKey)
+                putExtra("DEVICE_ID", deviceId)
+                putExtra("PAIRING_KEY", pairingKey)
+            })
+        },
+        onLiveCamera = { deviceId, pairingKey ->
+            startActivity(Intent(this, LiveCameraActivity::class.java).apply {
+                putExtra("DEVICE_ID", deviceId)
+                putExtra("PAIRING_KEY", pairingKey)
             })
         },
         onAppUsage = { deviceId, pairingKey ->
@@ -289,6 +295,7 @@ data class DeviceItem(
 // ─── Adapter ──────────────────────────────────────────────────────────────────
 class DeviceAdapter(
     private val onLiveScreen: (String, String) -> Unit,   // deviceId, pairingKey
+    private val onLiveCamera: (String, String) -> Unit,
     private val onAppUsage:   (String, String) -> Unit,
     private val onDelete:     (String, String, String) -> Unit  // deviceId, name, pairingKey
 ) : RecyclerView.Adapter<DeviceAdapter.VH>() {
@@ -306,6 +313,7 @@ class DeviceAdapter(
         val tvScreenshots: TextView = view.findViewById(R.id.tvScreenshotCount)
         val tvStatus:      TextView = view.findViewById(R.id.tvStatus)
         val btnLive:       Button   = view.findViewById(R.id.btnLiveScreen)
+        val btnCamera:     Button   = view.findViewById(R.id.btnLiveCamera)
         val btnUsage:      Button   = view.findViewById(R.id.btnAppUsage)
         val btnDelete:     Button   = view.findViewById(R.id.btnDeleteDevice)
     }
@@ -342,6 +350,7 @@ class DeviceAdapter(
         }
 
         holder.btnLive.setOnClickListener   { onLiveScreen(item.deviceId, item.pairingKey) }
+        holder.btnCamera.setOnClickListener { onLiveCamera(item.deviceId, item.pairingKey) }
         holder.btnUsage.setOnClickListener  { onAppUsage(item.deviceId, item.pairingKey) }
         holder.btnDelete.setOnClickListener { onDelete(item.deviceId, item.deviceName, item.pairingKey) }
     }

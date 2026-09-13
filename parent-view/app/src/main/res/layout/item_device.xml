@@ -78,7 +78,7 @@
             android:layout_marginTop="8dp"
             android:layout_marginStart="48dp" />
 
-        <!-- Live Screen + App Usage buttons -->
+        <!-- Live Screen + App Usage + Camera buttons -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -90,22 +90,33 @@
                 android:layout_width="0dp"
                 android:layout_height="42dp"
                 android:layout_weight="1"
-                android:text="📺 Live Screen"
+                android:text="📺 Screen"
                 android:backgroundTint="#1A4FC3F7"
                 android:textColor="#4FC3F7"
                 android:textSize="13sp"
-                android:layout_marginEnd="6dp" />
+                android:layout_marginEnd="4dp" />
+
+            <Button
+                android:id="@+id/btnLiveCamera"
+                android:layout_width="0dp"
+                android:layout_height="42dp"
+                android:layout_weight="1"
+                android:text="📷 Camera"
+                android:backgroundTint="#1AFFD54F"
+                android:textColor="#FFD54F"
+                android:textSize="13sp"
+                android:layout_marginHorizontal="2dp" />
 
             <Button
                 android:id="@+id/btnAppUsage"
                 android:layout_width="0dp"
                 android:layout_height="42dp"
                 android:layout_weight="1"
-                android:text="📊 App Usage"
+                android:text="📊 Usage"
                 android:backgroundTint="#1A66BB88"
                 android:textColor="#66BB88"
                 android:textSize="13sp"
-                android:layout_marginStart="6dp" />
+                android:layout_marginStart="4dp" />
         </LinearLayout>
 
         <!-- Delete device button -->

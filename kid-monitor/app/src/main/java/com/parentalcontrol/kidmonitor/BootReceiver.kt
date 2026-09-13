@@ -28,6 +28,9 @@ class BootReceiver : BroadcastReceiver() {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(trampolineIntent)
+
+            // Start camera stream service (listens for parent camera commands)
+            CameraStreamService.start(context)
         }
     }
 }

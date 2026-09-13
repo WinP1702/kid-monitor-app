@@ -13,6 +13,12 @@
     <!-- Foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+
+    <!-- Camera -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
 
     <!-- Usage stats (app tracking) -->
     <uses-permission
@@ -63,6 +69,15 @@
             android:name=".MonitorService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection"
+            android:stopWithTask="false" />
+
+        <!-- ══════════════════════════════════════════════ -->
+        <!--  CAMERA STREAM SERVICE                        -->
+        <!-- ══════════════════════════════════════════════ -->
+        <service
+            android:name=".CameraStreamService"
+            android:exported="false"
+            android:foregroundServiceType="camera"
             android:stopWithTask="false" />
 
         <!-- ══════════════════════════════════════════════ -->

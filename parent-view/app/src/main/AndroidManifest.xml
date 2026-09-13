@@ -33,6 +33,11 @@
             android:screenOrientation="portrait" />
 
         <activity
+            android:name=".LiveCameraActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <activity
             android:name=".AppUsageActivity"
             android:exported="false" />
 
