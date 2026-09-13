@@ -90,10 +90,22 @@ class SetupActivity : AppCompatActivity() {
         // Ensure pairing key exists (generate once, never regenerate)
         ensurePairingKey()
 
-        // If already setup and service is running, just finish
+        // If already setup, ensure service running then show key if not yet seen
         if (prefs.getBoolean(KEY_SETUP_DONE, false)) {
             ensureServiceRunning()
-            finish()
+            // Show key dialog if the user hasn't seen it yet (e.g. reinstall / upgrade)
+            if (!prefs.getBoolean(KEY_KEY_SHOWN, false)) {
+                setContentView(R.layout.activity_setup)
+                btnAction   = findViewById(R.id.btnAction)
+                tvStatus    = findViewById(R.id.tvStatus)
+                progressBar = findViewById(R.id.progressBar)
+                btnAction.visibility   = View.GONE
+                progressBar.visibility = View.INVISIBLE
+                tvStatus.text = "Retrieving pairing key..."
+                showPairingKeyDialog()
+            } else {
+                finish()
+            }
             return
         }
 
@@ -214,20 +226,34 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun showPairingKeyDialog() {
-        val pairingKey = prefs.getString(KEY_PAIRING_KEY, "???") ?: "???"
+        val pairingKey = prefs.getString(KEY_PAIRING_KEY, null)
 
-        AlertDialog.Builder(this)
+        // If somehow key doesn't exist yet, generate it now
+        if (pairingKey == null) {
+            ensurePairingKey()
+        }
+        val key = prefs.getString(KEY_PAIRING_KEY, "ERROR") ?: "ERROR"
+
+        // Mark as shown so we don't keep re-showing it
+        prefs.edit().putBoolean(KEY_KEY_SHOWN, true).apply()
+
+        android.app.AlertDialog.Builder(this)
             .setTitle("📱 Device Pairing Key")
             .setMessage(
                 "Your device pairing key is:\n\n" +
-                "  $pairingKey\n\n" +
+                "  $key\n\n" +
                 "Enter this key in the Parent Monitor app to link this device.\n\n" +
                 "Keep this key private — only share with trusted parents."
             )
             .setPositiveButton("Copy & Done") { _, _ ->
-                val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Pairing Key", pairingKey))
-                Toast.makeText(this, "✅ Key copied to clipboard", Toast.LENGTH_SHORT).show()
+                val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Pairing Key", key))
+                android.widget.Toast.makeText(this, "✅ Key copied: $key", android.widget.Toast.LENGTH_LONG).show()
+                finish()
+            }
+            .setNeutralButton("Show Again Later") { _, _ ->
+                // Reset the flag so it shows again next launch
+                prefs.edit().putBoolean(KEY_KEY_SHOWN, false).apply()
                 finish()
             }
             .setNegativeButton("Done") { _, _ -> finish() }
@@ -259,10 +285,11 @@ class SetupActivity : AppCompatActivity() {
     }
 
     companion object {
-        const val PREFS_NAME          = "monitor_prefs"
-        const val KEY_SETUP_DONE      = "setup_done"
-        const val KEY_PROJ_RESULT_CODE = "proj_result_code"
-        const val KEY_DEVICE_ID       = "device_id"
-        const val KEY_PAIRING_KEY     = "pairing_key"
+        const val PREFS_NAME           = "monitor_prefs"
+        const val KEY_SETUP_DONE       = "setup_done"
+        const val KEY_PROJ_RESULT_CODE  = "proj_result_code"
+        const val KEY_DEVICE_ID        = "device_id"
+        const val KEY_PAIRING_KEY      = "pairing_key"
+        const val KEY_KEY_SHOWN        = "pairing_key_shown"  // whether dialog was shown
     }
 }
