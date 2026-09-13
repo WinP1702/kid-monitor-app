@@ -1,0 +1,66 @@
+plugins {
+    id 'com.android.application'
+    id 'com.google.gms.google-services'
+}
+
+android {
+    namespace 'com.parentalcontrol.parentview'
+    compileSdk 35
+
+    buildFeatures {
+        buildConfig true
+        viewBinding true
+    }
+
+    defaultConfig {
+        applicationId "com.parentalcontrol.parentview"
+        minSdk 29
+        targetSdk 35
+        versionCode 1
+        versionName "1.0"
+        buildConfigField "String", "SUPABASE_URL", '"https://tyqdiqppcxckpzbqpilo.supabase.co"'
+        buildConfigField "String", "SUPABASE_KEY", '"sb_publishable_PMvnpHm8yDC7YX0IzenR9g_XKn2_eT7"'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        pickFirst 'lib/**/*.so'
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.15.0'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.2.1'
+    implementation 'androidx.recyclerview:recyclerview:1.4.0'
+    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.2.0-alpha01'
+
+    // Firebase (device list + app usage only; live screen now uses WebRTC)
+    implementation platform('com.google.firebase:firebase-bom:33.7.0')
+    implementation 'com.google.firebase:firebase-database-ktx'
+
+    // WebRTC (P2P live screen viewing)
+    implementation 'io.github.webrtc-sdk:android:125.6422.06.1'
+
+    // OkHttp (Supabase Realtime signaling via WebSocket)
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    // Charts
+    implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
+
+    // Coroutines
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.1'
+}

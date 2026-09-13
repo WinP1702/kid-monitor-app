@@ -1,0 +1,49 @@
+{
+  "project_info": {
+    "project_number": "610165585657",
+    "firebase_url": "https://familymonitor-6c564-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "familymonitor-6c564",
+    "storage_bucket": "familymonitor-6c564.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:610165585657:android:c29b93117f6ac659b6d428",
+        "android_client_info": {
+          "package_name": "com.parentalcontrol.kidmonitor"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAD57SsAeJjNEeRUPWq5t-cRwr02UnzWhY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:610165585657:android:1aa84fb59396f0f3b6d428",
+        "android_client_info": {
+          "package_name": "com.parentalcontrol.parentview"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAD57SsAeJjNEeRUPWq5t-cRwr02UnzWhY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

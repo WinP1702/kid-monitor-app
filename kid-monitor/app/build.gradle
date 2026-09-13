@@ -1,0 +1,68 @@
+plugins {
+    id 'com.android.application'
+    id 'com.google.gms.google-services'
+}
+
+android {
+    namespace 'com.parentalcontrol.kidmonitor'
+    compileSdk 35
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    defaultConfig {
+        applicationId "com.parentalcontrol.kidmonitor"
+        minSdk 29
+        targetSdk 35
+        versionCode 1
+        versionName "1.0"
+        buildConfigField "String", "SUPABASE_URL", '"https://tyqdiqppcxckpzbqpilo.supabase.co"'
+        buildConfigField "String", "SUPABASE_KEY", '"sb_publishable_PMvnpHm8yDC7YX0IzenR9g_XKn2_eT7"'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        pickFirst 'lib/**/*.so'
+    }
+}
+
+dependencies {
+    // AndroidX core
+    implementation 'androidx.core:core-ktx:1.15.0'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.2.1'
+    implementation 'androidx.lifecycle:lifecycle-service:2.9.1'
+    implementation 'androidx.work:work-runtime-ktx:2.10.1'
+
+    // Firebase (device registration + app usage only)
+    implementation platform('com.google.firebase:firebase-bom:33.7.0')
+    implementation 'com.google.firebase:firebase-database-ktx'
+    implementation 'com.google.firebase:firebase-analytics-ktx'
+
+    // WebRTC (screen capture + P2P streaming)
+    implementation 'io.github.webrtc-sdk:android:125.6422.06.1'
+
+    // OkHttp (Supabase Realtime signaling via WebSocket)
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    // Coroutines
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.1'
+
+    // Gson
+    implementation 'com.google.code.gson:gson:2.10.1'
+}

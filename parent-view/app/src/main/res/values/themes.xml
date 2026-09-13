@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.ParentView" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+        <item name="colorPrimary">#4FC3F7</item>
+        <item name="colorPrimaryVariant">#0288D1</item>
+        <item name="colorOnPrimary">#000000</item>
+        <item name="android:windowBackground">#0A0A1A</item>
+        <item name="android:statusBarColor">#121228</item>
+        <item name="android:navigationBarColor">#0A0A1A</item>
+    </style>
+</resources>

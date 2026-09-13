@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "103411390370",
+    "project_id": "miro-mirror-2820e",
+    "storage_bucket": "miro-mirror-2820e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:103411390370:android:9189821f6759948cda04fb",
+        "android_client_info": {
+          "package_name": "com.example.miro"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC9UYO31mo3nWJPZR8oiylCj_2--fDTrlc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- WebRTC SurfaceViewRenderer — fills the entire screen with live video -->
+    <org.webrtc.SurfaceViewRenderer
+        android:id="@+id/surfaceViewRenderer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="visible" />
+
+    <!-- Waiting overlay — shown until first video frame arrives -->
+    <LinearLayout
+        android:id="@+id/waitingOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="#CC0A0A1A"
+        android:visibility="visible">
+
+        <ProgressBar
+            android:id="@+id/progressBar"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:indeterminateTint="#4FC3F7" />
+
+        <TextView
+            android:id="@+id/tvWaitingTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Connecting..."
+            android:textColor="#FFFFFF"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:paddingTop="16dp" />
+
+        <TextView
+            android:id="@+id/tvWaitingSubtitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Make sure Kid Monitor is open on the child device"
+            android:textColor="#8899BB"
+            android:textSize="13sp"
+            android:gravity="center"
+            android:paddingTop="8dp"
+            android:paddingHorizontal="32dp" />
+
+    </LinearLayout>
+
+    <!-- Screenshot FAB — visible only while streaming -->
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fabScreenshot"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentEnd="true"
+        android:layout_alignParentBottom="true"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="52dp"
+        android:contentDescription="Take screenshot"
+        android:visibility="gone"
+        app:srcCompat="@android:drawable/ic_menu_camera"
+        app:backgroundTint="#CC1565C0"
+        app:tint="@android:color/white"
+        app:fabSize="normal"
+        xmlns:app="http://schemas.android.com/apk/res-auto" />
+
+    <!-- Status bar at bottom (always visible over video) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentBottom="true"
+        android:background="#CC000000"
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="8dp"
+        android:gravity="center_vertical">
+
+        <!-- Pulsing dot (green/red) -->
+        <View
+            android:id="@+id/statusDot"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
+            android:background="@drawable/status_dot_waiting"
+            android:layout_marginEnd="8dp" />
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="⏳ Connecting to signaling..."
+            android:textColor="#4FC3F7"
+            android:textSize="13sp" />
+
+        <!-- Device name label -->
+        <TextView
+            android:id="@+id/tvDeviceLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#445566"
+            android:textSize="11sp" />
+
+    </LinearLayout>
+
+</RelativeLayout>

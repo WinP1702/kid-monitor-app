@@ -1,0 +1,26 @@
+*.iml
+.gradle
+/local.properties
+.idea/
+.artifacts/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Build outputs — never commit APKs/AABs
+*.apk
+*.aab
+*.ap_
+*/build/
+**/build/
+
+# Signing keys
+*.jks
+*.keystore
+
+# Misc
+Thumbs.db
+*.swp
