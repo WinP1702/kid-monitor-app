@@ -112,6 +112,12 @@ class WebRTCCameraKidClient(
                 override fun onConnectionChange(s: PeerConnection.PeerConnectionState?) {
                     Log.d(TAG, "Camera connection: $s")
                     signaling.send("status", JSONObject().apply { put("msg", s?.name ?: "unknown") })
+                    // Auto-release camera if peer drops without sending an explicit "stop"
+                    if (s == PeerConnection.PeerConnectionState.DISCONNECTED ||
+                        s == PeerConnection.PeerConnectionState.FAILED) {
+                        Log.d(TAG, "Peer disconnected/failed — releasing camera")
+                        releaseCamera()
+                    }
                 }
                 override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {}
                 override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
@@ -202,6 +208,13 @@ class WebRTCCameraKidClient(
                             override fun onSetFailure(e: String?) { Log.e(TAG, "setRemote fail: $e") }
                         }, SessionDescription(SessionDescription.Type.ANSWER, sdp))
                     }
+                }
+                "stop" -> {
+                    // Parent closed the camera view — stop streaming immediately
+                    Log.d(TAG, "Parent sent stop — releasing camera and closing peer connection")
+                    pc?.close()
+                    pc = null
+                    releaseCamera()
                 }
                 // No ice-parent handler needed — vanilla ICE embeds all candidates in SDP
             }
