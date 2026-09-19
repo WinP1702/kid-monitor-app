@@ -2,22 +2,18 @@ package com.parentalcontrol.parentview
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.*
 import org.json.JSONObject
 import org.webrtc.*
 
 /**
- * Parent-side WebRTC client.
- * - Connects to Supabase Realtime signaling channel
- * - Sends "request" to kid device to start streaming
- * - Receives offer → creates answer → exchanges ICE candidates
- * - Renders received video on SurfaceViewRenderer
+ * Parent-side WebRTC screen client.
+ * Channel: "screen-{pairingKey}-{deviceId}"
  *
- * Usage:
- *   val client = WebRTCParentClient(context, deviceId, surfaceViewRenderer)
- *   client.onStatusChanged = { status -> updateUI(status) }
- *   client.start()
- *   // later:
- *   client.stop()
+ * Uses VANILLA ICE (GATHER_ONCE):
+ *   - Answer is sent only after all ICE candidates are gathered and embedded in SDP.
+ *   - Zero ice-* messages over Realtime — avoids "too many messages" rate limit.
+ *   - 3 messages per session: request -> offer (from kid) -> answer.
  */
 class WebRTCParentClient(
     private val context: Context,
@@ -29,7 +25,11 @@ class WebRTCParentClient(
     private var pc: PeerConnection? = null
     private var eglBase: EglBase? = null
 
-    private val pendingRemoteIce = mutableListOf<IceCandidate>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var isConnected = false
+    private var requestJob: Job? = null
+
+    @Volatile private var answerSent = false
 
     private val signaling = SupabaseSignaling(
         supabaseUrl = BuildConfig.SUPABASE_URL,
@@ -43,7 +43,6 @@ class WebRTCParentClient(
         PeerConnection.IceServer.builder("stun:stun2.l.google.com:19302").createIceServer()
     )
 
-    /** Called on main thread with human-readable status string */
     var onStatusChanged: ((String) -> Unit)? = null
 
     // ─── Start ────────────────────────────────────────────────────────
@@ -79,44 +78,54 @@ class WebRTCParentClient(
         Log.d(TAG, "PeerConnectionFactory ready")
     }
 
-    // ─── Create PeerConnection (answerer role) ────────────────────────
+    // ─── Create PeerConnection (answerer, vanilla ICE) ────────────────
     private fun createPeerConnection() {
-        pendingRemoteIce.clear()
+        answerSent = false
 
         val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            // VANILLA ICE: gather all candidates once, embed in answer SDP
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
         }
 
         pc = factory!!.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
 
             override fun onIceCandidate(c: IceCandidate) {
-                signaling.send("ice-parent", JSONObject().apply {
-                    put("candidate",     c.sdp)
-                    put("sdpMid",        c.sdpMid)
-                    put("sdpMLineIndex", c.sdpMLineIndex)
-                })
+                // Vanilla ICE: candidates embedded in answer SDP, not sent individually
+            }
+
+            override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) {
+                // Send answer only after ALL local candidates are gathered
+                if (s == PeerConnection.IceGatheringState.COMPLETE && !answerSent) {
+                    answerSent = true
+                    val sdp = pc?.localDescription?.description ?: return
+                    signaling.send("answer", JSONObject().apply { put("sdp", sdp) })
+                    Log.d(TAG, "Answer sent (vanilla ICE — candidates embedded in SDP)")
+                }
             }
 
             override fun onTrack(transceiver: RtpTransceiver) {
                 val track = transceiver.receiver.track()
                 if (track is VideoTrack) {
-                    Log.d(TAG, "Remote video track received!")
+                    Log.d(TAG, "Remote video track received")
                     track.setEnabled(true)
                     track.addSink(renderer)
-                    updateStatus("🟢 Streaming")
+                    updateStatus("Streaming")
                 }
             }
 
             override fun onConnectionChange(s: PeerConnection.PeerConnectionState?) {
                 Log.d(TAG, "Connection: $s")
                 when (s) {
-                    PeerConnection.PeerConnectionState.CONNECTED    -> updateStatus("🟢 Streaming")
-                    PeerConnection.PeerConnectionState.DISCONNECTED -> updateStatus("🔴 Disconnected — retrying...")
-                    PeerConnection.PeerConnectionState.FAILED       -> {
-                        updateStatus("❌ Connection failed")
-                        // Re-request stream after a delay
+                    PeerConnection.PeerConnectionState.CONNECTED -> {
+                        isConnected = true
+                        updateStatus("Streaming")
+                    }
+                    PeerConnection.PeerConnectionState.DISCONNECTED -> updateStatus("Disconnected — retrying...")
+                    PeerConnection.PeerConnectionState.FAILED -> {
+                        updateStatus("Connection failed")
                         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            isConnected = false
                             requestStream()
                         }, 3000)
                     }
@@ -125,13 +134,11 @@ class WebRTCParentClient(
             }
 
             override fun onAddStream(s: MediaStream?) {
-                // Legacy callback — use onTrack for UNIFIED_PLAN
                 s?.videoTracks?.firstOrNull()?.addSink(renderer)
             }
 
             override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {}
             override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
-            override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) {}
             override fun onIceCandidatesRemoved(c: Array<IceCandidate>?) {}
             override fun onRemoveStream(s: MediaStream?) {}
             override fun onDataChannel(d: DataChannel?) {}
@@ -147,8 +154,19 @@ class WebRTCParentClient(
     private fun requestStream() {
         pc?.close()
         pc = null
-        updateStatus("⏳ Requesting stream...")
-        signaling.send("request", JSONObject())
+        updateStatus("Requesting stream...")
+        sendRequestWithRetry()
+    }
+
+    private fun sendRequestWithRetry() {
+        requestJob?.cancel()
+        requestJob = scope.launch {
+            while (isActive && !isConnected) {
+                Log.d(TAG, "Sending screen request to kid")
+                signaling.send("request", JSONObject())
+                delay(8_000L)
+            }
+        }
     }
 
     // ─── Signaling setup ──────────────────────────────────────────────
@@ -157,31 +175,25 @@ class WebRTCParentClient(
             when (event) {
                 "offer" -> {
                     Log.d(TAG, "Offer received — creating answer")
-                    updateStatus("⏳ Connecting...")
+                    updateStatus("Connecting...")
 
                     if (pc == null) createPeerConnection()
 
                     val sdp = payload.optString("sdp")
                     pc?.setRemoteDescription(object : SdpObserver {
                         override fun onSetSuccess() {
-                            Log.d(TAG, "Remote offer set ✓ — creating answer")
-                            // Flush ICE candidates received before the offer was processed
-                            pendingRemoteIce.forEach { pc?.addIceCandidate(it) }
-                            pendingRemoteIce.clear()
-
+                            Log.d(TAG, "Remote offer set — creating answer")
                             pc?.createAnswer(object : SdpObserver {
-                                override fun onCreateSuccess(sdp: SessionDescription) {
+                                override fun onCreateSuccess(answer: SessionDescription) {
                                     pc?.setLocalDescription(object : SdpObserver {
                                         override fun onSetSuccess() {
-                                            signaling.send("answer", JSONObject().apply {
-                                                put("sdp", sdp.description)
-                                            })
-                                            Log.d(TAG, "Answer sent ✓")
+                                            Log.d(TAG, "Local answer set — waiting for ICE gathering")
+                                            // Answer is sent from onIceGatheringChange(COMPLETE)
                                         }
                                         override fun onCreateSuccess(s: SessionDescription?) {}
-                                        override fun onCreateFailure(e: String?) { Log.e(TAG, "setLocal fail: $e") }
+                                        override fun onCreateFailure(e: String?) {}
                                         override fun onSetFailure(e: String?) { Log.e(TAG, "setLocal fail: $e") }
-                                    }, sdp)
+                                    }, answer)
                                 }
                                 override fun onCreateFailure(e: String?) { Log.e(TAG, "createAnswer fail: $e") }
                                 override fun onSetSuccess() {}
@@ -194,23 +206,11 @@ class WebRTCParentClient(
                     }, SessionDescription(SessionDescription.Type.OFFER, sdp))
                 }
 
-                "ice-kid" -> {
-                    val candidate = IceCandidate(
-                        payload.optString("sdpMid"),
-                        payload.optInt("sdpMLineIndex"),
-                        payload.optString("candidate")
-                    )
-                    if (pc?.remoteDescription != null) {
-                        pc?.addIceCandidate(candidate)
-                    } else {
-                        pendingRemoteIce.add(candidate)
-                    }
-                }
-
                 "status" -> {
                     val msg = payload.optString("msg")
-                    if (msg.isNotEmpty()) updateStatus("📱 $msg")
+                    if (msg.isNotEmpty()) updateStatus(msg)
                 }
+                // No ice-kid handler needed — vanilla ICE embeds all candidates in SDP
             }
         }
 
@@ -220,11 +220,11 @@ class WebRTCParentClient(
         }
 
         signaling.onDisconnected = {
-            updateStatus("🔌 Signaling disconnected — reconnecting...")
+            updateStatus("Signaling disconnected — reconnecting...")
         }
 
         signaling.connect()
-        updateStatus("⏳ Connecting to signaling...")
+        updateStatus("Connecting to signaling...")
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────
@@ -236,6 +236,8 @@ class WebRTCParentClient(
 
     // ─── Stop ─────────────────────────────────────────────────────────
     fun stop() {
+        isConnected = true  // stop retry loop
+        scope.cancel()
         signaling.disconnect()
         pc?.close()
         factory?.dispose()

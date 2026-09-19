@@ -1,6 +1,5 @@
 plugins {
     id 'com.android.application'
-    id 'com.google.gms.google-services'
 }
 
 android {
@@ -47,14 +46,10 @@ dependencies {
     implementation 'androidx.recyclerview:recyclerview:1.4.0'
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.2.0-alpha01'
 
-    // Firebase (device list + app usage only; live screen now uses WebRTC)
-    implementation platform('com.google.firebase:firebase-bom:33.7.0')
-    implementation 'com.google.firebase:firebase-database-ktx'
-
-    // WebRTC (P2P live screen viewing)
+    // WebRTC (P2P live screen + camera viewing)
     implementation 'io.github.webrtc-sdk:android:125.6422.06.1'
 
-    // OkHttp (Supabase Realtime signaling via WebSocket)
+    // OkHttp — Supabase Realtime signaling (WebSocket) + REST API calls
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 
     // Charts
@@ -62,5 +57,4 @@ dependencies {
 
     // Coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1'
-    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.1'
 }

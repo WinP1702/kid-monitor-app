@@ -5,20 +5,27 @@ import android.os.Bundle
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.github.mikephil.charting.charts.HorizontalBarChart
 import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.*
 import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
-import com.google.firebase.database.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
 
 /**
  * Shows per-app screen time for the child device.
- * Displays a horizontal bar chart + detailed list.
+ * Reads from Supabase Postgres (app_usage table) via REST.
+ * Zero Firebase dependencies.
  */
 class AppUsageActivity : AppCompatActivity() {
 
@@ -34,6 +41,11 @@ class AppUsageActivity : AppCompatActivity() {
     private var pairingKey: String = ""
     private val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_app_usage)
@@ -42,12 +54,12 @@ class AppUsageActivity : AppCompatActivity() {
         deviceId   = intent.getStringExtra("deviceId") ?: run { finish(); return }
         pairingKey = intent.getStringExtra("pairingKey") ?: ""
 
-        barChart = findViewById(R.id.barChart)
-        rvApps = findViewById(R.id.rvApps)
+        barChart    = findViewById(R.id.barChart)
+        rvApps      = findViewById(R.id.rvApps)
         progressBar = findViewById(R.id.progressBar)
-        tvDate = findViewById(R.id.tvDate)
+        tvDate      = findViewById(R.id.tvDate)
         tvTotalTime = findViewById(R.id.tvTotalTime)
-        tvNoData = findViewById(R.id.tvNoData)
+        tvNoData    = findViewById(R.id.tvNoData)
 
         tvDate.text = "Today – $today"
 
@@ -88,44 +100,65 @@ class AppUsageActivity : AppCompatActivity() {
 
     private fun loadUsageData() {
         progressBar.visibility = View.VISIBLE
-        val ref = FirebaseDatabase.getInstance()
-            .getReference("users/$pairingKey/devices/$deviceId/appUsage/$today")
 
-        ref.addListenerForSingleValueEvent(object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                progressBar.visibility = View.GONE
+        lifecycleScope.launch {
+            val apps = fetchUsageFromSupabase()
 
+            progressBar.visibility = View.GONE
+
+            if (apps.isEmpty()) {
+                tvNoData.visibility = View.VISIBLE
+                barChart.visibility = View.GONE
+                return@launch
+            }
+
+            tvNoData.visibility = View.GONE
+            barChart.visibility = View.VISIBLE
+
+            val totalMins = apps.sumOf { it.totalMinutes }
+            tvTotalTime.text = "Total screen time: ${formatMinutes(totalMins)}"
+
+            appAdapter.submitList(apps)
+            updateChart(apps.take(8))
+        }
+    }
+
+    /** Query Supabase app_usage table filtered by device_id + date */
+    private suspend fun fetchUsageFromSupabase(): List<AppUsageItem> = withContext(Dispatchers.IO) {
+        try {
+            val supabaseUrl = BuildConfig.SUPABASE_URL
+            val supabaseKey = BuildConfig.SUPABASE_KEY
+            val url = "$supabaseUrl/rest/v1/app_usage" +
+                "?select=app_name,total_minutes,last_used" +
+                "&device_id=eq.$deviceId" +
+                "&date=eq.$today" +
+                "&order=total_minutes.desc"
+
+            val request = Request.Builder()
+                .url(url)
+                .header("apikey", supabaseKey)
+                .header("Authorization", "Bearer $supabaseKey")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+
+            http.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val body = resp.body?.string() ?: return@withContext emptyList()
+                val arr = JSONArray(body)
                 val apps = mutableListOf<AppUsageItem>()
-                for (child in snapshot.children) {
-                    val appName = child.child("appName").getValue(String::class.java) ?: continue
-                    val totalMins = child.child("totalTimeMinutes").getValue(Long::class.java) ?: 0L
-                    val lastUsed = child.child("lastUsed").getValue(Long::class.java) ?: 0L
-                    apps.add(AppUsageItem(appName, totalMins, lastUsed))
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    val appName    = obj.optString("app_name", "Unknown")
+                    val totalMins  = obj.optLong("total_minutes", 0L)
+                    val lastUsed   = obj.optLong("last_used", 0L)
+                    if (totalMins > 0) apps.add(AppUsageItem(appName, totalMins, lastUsed))
                 }
-
-                apps.sortByDescending { it.totalMinutes }
-
-                if (apps.isEmpty()) {
-                    tvNoData.visibility = View.VISIBLE
-                    barChart.visibility = View.GONE
-                    return
-                }
-
-                tvNoData.visibility = View.GONE
-                barChart.visibility = View.VISIBLE
-
-                val totalMins = apps.sumOf { it.totalMinutes }
-                tvTotalTime.text = "Total screen time: ${formatMinutes(totalMins)}"
-
-                appAdapter.submitList(apps)
-                updateChart(apps.take(8))  // Show top 8 in chart
+                apps
             }
-
-            override fun onCancelled(error: DatabaseError) {
-                progressBar.visibility = View.GONE
-                Toast.makeText(this@AppUsageActivity, "Error: ${error.message}", Toast.LENGTH_SHORT).show()
-            }
-        })
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     private fun updateChart(apps: List<AppUsageItem>) {

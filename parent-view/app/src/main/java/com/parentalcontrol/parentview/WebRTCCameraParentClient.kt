@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import kotlinx.coroutines.*
 import org.json.JSONObject
 import org.webrtc.*
 
@@ -11,9 +12,9 @@ import org.webrtc.*
  * Parent-side WebRTC camera client.
  * Channel: "camera-{pairingKey}-{deviceId}"
  *
- * Sends "request" → kid starts camera stream.
- * Sends "switch"  → kid switches front/back camera.
- * Receives video track → renders on SurfaceViewRenderer.
+ * Uses VANILLA ICE (GATHER_ONCE):
+ *   - Answer is sent only after all ICE candidates are gathered and embedded in SDP.
+ *   - Zero ice-* messages over Realtime — avoids "too many messages" rate limit.
  */
 class WebRTCCameraParentClient(
     private val context: Context,
@@ -25,8 +26,12 @@ class WebRTCCameraParentClient(
     private var pc: PeerConnection? = null
     private var eglBase: EglBase? = null
 
-    private val pendingRemoteIce = mutableListOf<IceCandidate>()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var isConnected = false
+    private var requestJob: Job? = null
+
+    @Volatile private var answerSent = false
 
     var onStatusChanged: ((String) -> Unit)? = null
 
@@ -66,97 +71,62 @@ class WebRTCCameraParentClient(
         renderer.setEnableHardwareScaler(true)
     }
 
-    // ─── Signaling ────────────────────────────────────────────────────
-    private fun setupSignaling() {
-        signaling.onMessage = { event, payload ->
-            when (event) {
-                "offer" -> {
-                    val sdp = payload.optString("sdp")
-                    if (sdp.isNotEmpty()) handleOffer(sdp)
-                }
-                "ice-kid" -> {
-                    val candidate = IceCandidate(
-                        payload.optString("sdpMid"),
-                        payload.optInt("sdpMLineIndex"),
-                        payload.optString("candidate")
-                    )
-                    if (pc?.remoteDescription != null) pc?.addIceCandidate(candidate)
-                    else pendingRemoteIce.add(candidate)
-                }
-                "status" -> {
-                    val msg = payload.optString("msg")
-                    mainHandler.post { onStatusChanged?.invoke(msg) }
-                }
-                "camera-switched" -> {
-                    val front = payload.optBoolean("front", false)
-                    val label = if (front) "📷 Front camera" else "📷 Back camera"
-                    mainHandler.post { onStatusChanged?.invoke(label) }
-                }
-            }
-        }
+    // ─── Create PeerConnection (answerer, vanilla ICE) ────────────────
+    private fun createPeerConnection() {
+        answerSent = false
 
-        signaling.onConnected = {
-            Log.d(TAG, "Camera signaling connected — requesting stream")
-            mainHandler.post { onStatusChanged?.invoke("Connecting...") }
-            // Request stream from kid (default back camera)
-            signaling.send("request", JSONObject().apply { put("front", false) })
-        }
-
-        signaling.connect()
-    }
-
-    private fun handleOffer(sdpStr: String) {
-        pendingRemoteIce.clear()
-        setupPeerConnection()
-
-        val offer = SessionDescription(SessionDescription.Type.OFFER, sdpStr)
-        pc?.setRemoteDescription(object : SdpObserver {
-            override fun onSetSuccess() {
-                pendingRemoteIce.forEach { pc?.addIceCandidate(it) }
-                pendingRemoteIce.clear()
-                createAndSendAnswer()
-            }
-            override fun onCreateSuccess(s: SessionDescription?) {}
-            override fun onCreateFailure(e: String?) {}
-            override fun onSetFailure(e: String?) { Log.e(TAG, "setRemote fail: $e") }
-        }, offer)
-    }
-
-    private fun setupPeerConnection() {
         val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            // VANILLA ICE: gather all candidates once, embed in answer SDP
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
         }
 
         pc = factory!!.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
             override fun onIceCandidate(c: IceCandidate) {
-                signaling.send("ice-parent", JSONObject().apply {
-                    put("candidate",    c.sdp)
-                    put("sdpMid",       c.sdpMid)
-                    put("sdpMLineIndex", c.sdpMLineIndex)
-                })
+                // Vanilla ICE: candidates embedded in SDP, not sent individually
             }
+
+            override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) {
+                // Send answer only after ALL local candidates are gathered
+                if (s == PeerConnection.IceGatheringState.COMPLETE && !answerSent) {
+                    answerSent = true
+                    val sdp = pc?.localDescription?.description ?: return
+                    signaling.send("answer", JSONObject().apply { put("sdp", sdp) })
+                    Log.d(TAG, "Camera answer sent (vanilla ICE)")
+                }
+            }
+
             override fun onTrack(transceiver: RtpTransceiver?) {
                 val track = transceiver?.receiver?.track()
                 if (track is VideoTrack) {
                     mainHandler.post {
                         track.addSink(renderer)
-                        onStatusChanged?.invoke("📷 Camera live")
+                        onStatusChanged?.invoke("Camera live")
                     }
                 }
             }
+
             override fun onConnectionChange(s: PeerConnection.PeerConnectionState?) {
                 val label = when (s) {
-                    PeerConnection.PeerConnectionState.CONNECTED    -> "📷 Camera live"
-                    PeerConnection.PeerConnectionState.DISCONNECTED -> "Disconnected"
-                    PeerConnection.PeerConnectionState.FAILED       -> "Connection failed"
+                    PeerConnection.PeerConnectionState.CONNECTED -> {
+                        isConnected = true
+                        "Camera live"
+                    }
+                    PeerConnection.PeerConnectionState.DISCONNECTED -> {
+                        isConnected = false
+                        "Disconnected"
+                    }
+                    PeerConnection.PeerConnectionState.FAILED -> {
+                        isConnected = false
+                        "Connection failed"
+                    }
                     else -> s?.name ?: "..."
                 }
                 mainHandler.post { onStatusChanged?.invoke(label) }
             }
+
             override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {}
             override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
-            override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) {}
             override fun onIceCandidatesRemoved(c: Array<IceCandidate>?) {}
             override fun onAddStream(s: MediaStream?) {}
             override fun onRemoveStream(s: MediaStream?) {}
@@ -167,22 +137,77 @@ class WebRTCCameraParentClient(
         })
     }
 
-    private fun createAndSendAnswer() {
-        pc?.createAnswer(object : SdpObserver {
-            override fun onCreateSuccess(sdp: SessionDescription) {
-                pc?.setLocalDescription(object : SdpObserver {
-                    override fun onSetSuccess() {
-                        signaling.send("answer", JSONObject().apply { put("sdp", sdp.description) })
+    // ─── Handle incoming offer from kid ───────────────────────────────
+    private fun handleOffer(sdpStr: String) {
+        if (pc == null) createPeerConnection()
+
+        val offer = SessionDescription(SessionDescription.Type.OFFER, sdpStr)
+        pc?.setRemoteDescription(object : SdpObserver {
+            override fun onSetSuccess() {
+                Log.d(TAG, "Remote offer set — creating camera answer")
+                pc?.createAnswer(object : SdpObserver {
+                    override fun onCreateSuccess(answer: SessionDescription) {
+                        pc?.setLocalDescription(object : SdpObserver {
+                            override fun onSetSuccess() {
+                                Log.d(TAG, "Local answer set — waiting for ICE gathering")
+                                // Answer sent from onIceGatheringChange(COMPLETE)
+                            }
+                            override fun onCreateSuccess(s: SessionDescription?) {}
+                            override fun onCreateFailure(e: String?) {}
+                            override fun onSetFailure(e: String?) { Log.e(TAG, "setLocal fail: $e") }
+                        }, answer)
                     }
-                    override fun onCreateSuccess(s: SessionDescription?) {}
-                    override fun onCreateFailure(e: String?) {}
-                    override fun onSetFailure(e: String?) { Log.e(TAG, "setLocal fail: $e") }
-                }, sdp)
+                    override fun onCreateFailure(e: String?) { Log.e(TAG, "createAnswer fail: $e") }
+                    override fun onSetSuccess() {}
+                    override fun onSetFailure(e: String?) {}
+                }, MediaConstraints())
             }
-            override fun onCreateFailure(e: String?) { Log.e(TAG, "createAnswer fail: $e") }
-            override fun onSetSuccess() {}
-            override fun onSetFailure(e: String?) {}
-        }, MediaConstraints())
+            override fun onCreateSuccess(s: SessionDescription?) {}
+            override fun onCreateFailure(e: String?) {}
+            override fun onSetFailure(e: String?) { Log.e(TAG, "setRemoteOffer fail: $e") }
+        }, offer)
+    }
+
+    // ─── Retry request until kid answers ──────────────────────────────
+    private fun sendRequestWithRetry() {
+        requestJob?.cancel()
+        requestJob = scope.launch {
+            while (isActive && !isConnected) {
+                Log.d(TAG, "Sending camera request to kid")
+                signaling.send("request", JSONObject().apply { put("front", false) })
+                delay(8_000L)
+            }
+        }
+    }
+
+    // ─── Signaling ────────────────────────────────────────────────────
+    private fun setupSignaling() {
+        signaling.onMessage = { event, payload ->
+            when (event) {
+                "offer" -> {
+                    val sdp = payload.optString("sdp")
+                    if (sdp.isNotEmpty()) handleOffer(sdp)
+                }
+                "status" -> {
+                    val msg = payload.optString("msg")
+                    mainHandler.post { onStatusChanged?.invoke(msg) }
+                }
+                "camera-switched" -> {
+                    val front = payload.optBoolean("front", false)
+                    val label = if (front) "Front camera" else "Back camera"
+                    mainHandler.post { onStatusChanged?.invoke(label) }
+                }
+                // No ice-kid handler needed — vanilla ICE embeds all candidates in SDP
+            }
+        }
+
+        signaling.onConnected = {
+            Log.d(TAG, "Camera signaling connected — requesting stream")
+            mainHandler.post { onStatusChanged?.invoke("Requesting camera...") }
+            sendRequestWithRetry()
+        }
+
+        signaling.connect()
     }
 
     // ─── Switch camera ────────────────────────────────────────────────
@@ -192,14 +217,14 @@ class WebRTCCameraParentClient(
 
     // ─── Stop ─────────────────────────────────────────────────────────
     fun stop() {
-        // Tell kid to stop streaming
+        isConnected = true
+        scope.cancel()
         signaling.send("stop", JSONObject())
-
+        signaling.disconnect()
         pc?.close()
         factory?.dispose()
         try { renderer.release() } catch (_: Exception) {}
         eglBase?.release()
-        signaling.disconnect()
     }
 
     companion object { private const val TAG = "WebRTCCameraParent" }

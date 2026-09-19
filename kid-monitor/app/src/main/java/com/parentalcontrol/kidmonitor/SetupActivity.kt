@@ -133,14 +133,19 @@ class SetupActivity : AppCompatActivity() {
         nextStep()
     }
 
-    // ─── Pairing Key ──────────────────────────────────────────────────
+    // ─── Pairing Key + Device ID ─────────────────────────────────────
     private fun ensurePairingKey() {
+        // Pairing key
         if (prefs.getString(KEY_PAIRING_KEY, null) == null) {
             val key = UUID.randomUUID().toString()
                 .replace("-", "")
                 .take(8)
                 .uppercase()
             prefs.edit().putString(KEY_PAIRING_KEY, key).apply()
+        }
+        // Device ID — must be set BEFORE services start to avoid race condition
+        if (prefs.getString(KEY_DEVICE_ID, null) == null) {
+            prefs.edit().putString(KEY_DEVICE_ID, UUID.randomUUID().toString()).apply()
         }
     }
 
@@ -276,11 +281,8 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun onDialogDismissed(afterSetup: Boolean) {
-        if (afterSetup) {
-            // NOW it is safe to hide the icon (dialog is gone, nothing to kill)
-            hideAppIcon()
-        } else {
-            // Ensure service is running then finish quietly
+        hideAppIcon()             // Always re-hide — safe to call repeatedly
+        if (!afterSetup) {
             ensureServiceRunning()
         }
         finish()

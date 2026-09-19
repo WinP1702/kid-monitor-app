@@ -7,17 +7,18 @@ import org.webrtc.*
 
 /**
  * Kid-side WebRTC camera client.
- * Captures from front/back camera and streams to parent via WebRTC P2P.
  * Channel: "camera-{pairingKey}-{deviceId}"
  *
- * The parent sends "request" → kid creates offer → parent answers → P2P stream starts.
- * The parent can send "switch" → kid switches camera (front ↔ back).
+ * Uses VANILLA ICE (GATHER_ONCE):
+ *   - All candidates embedded in the offer SDP before sending.
+ *   - Zero ice-* messages over Realtime — avoids rate limits.
+ *   - 3 messages total per session: request -> offer -> answer.
  */
 class WebRTCCameraKidClient(
     private val context: Context,
     private val deviceId: String,
     private val pairingKey: String,
-    private var facingFront: Boolean = false   // false = back camera
+    private var facingFront: Boolean = false
 ) {
     private var factory: PeerConnectionFactory? = null
     private var pc: PeerConnection? = null
@@ -25,7 +26,7 @@ class WebRTCCameraKidClient(
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var eglBase: EglBase? = null
 
-    private val pendingRemoteIce = mutableListOf<IceCandidate>()
+    @Volatile private var offerSent = false
 
     private val signaling = SupabaseSignaling(
         supabaseUrl = BuildConfig.SUPABASE_URL,
@@ -71,7 +72,7 @@ class WebRTCCameraKidClient(
         return cameras.firstOrNull() ?: ""
     }
 
-    // ─── Create PeerConnection + video track ──────────────────────────
+    // ─── Create PeerConnection + video track (vanilla ICE) ────────────
     private fun setupPeerConnectionWithVideo(): Boolean {
         return try {
             val cameraId = getCameraId()
@@ -81,34 +82,39 @@ class WebRTCCameraKidClient(
             }
 
             capturer = Camera2Capturer(context, cameraId, null)
-            val videoSource = factory!!.createVideoSource(false /* not screencast */)
+            val videoSource = factory!!.createVideoSource(false)
             surfaceTextureHelper = SurfaceTextureHelper.create("CamThread", eglBase!!.eglBaseContext)
             capturer!!.initialize(surfaceTextureHelper, context, videoSource.capturerObserver)
-            capturer!!.startCapture(640, 480, 30)
+            capturer!!.startCapture(1280, 720, 30)
             Log.d(TAG, "Camera capture started: $cameraId (front=$facingFront)")
 
             val videoTrack = factory!!.createVideoTrack("cam0", videoSource)
 
             val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
                 sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-                continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+                // VANILLA ICE: gather all candidates once, embed in offer SDP
+                continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
             }
 
             pc = factory!!.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
                 override fun onIceCandidate(c: IceCandidate) {
-                    signaling.send("ice-kid", JSONObject().apply {
-                        put("candidate",    c.sdp)
-                        put("sdpMid",       c.sdpMid)
-                        put("sdpMLineIndex", c.sdpMLineIndex)
-                    })
+                    // Vanilla ICE: candidates embedded in SDP, not sent individually
+                }
+                override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) {
+                    // Send offer only after ALL candidates are gathered
+                    if (s == PeerConnection.IceGatheringState.COMPLETE && !offerSent) {
+                        offerSent = true
+                        val sdp = pc?.localDescription?.description ?: return
+                        signaling.send("offer", JSONObject().apply { put("sdp", sdp) })
+                        Log.d(TAG, "Camera offer sent (vanilla ICE)")
+                    }
                 }
                 override fun onConnectionChange(s: PeerConnection.PeerConnectionState?) {
-                    Log.d(TAG, "Connection: $s")
+                    Log.d(TAG, "Camera connection: $s")
                     signaling.send("status", JSONObject().apply { put("msg", s?.name ?: "unknown") })
                 }
                 override fun onIceConnectionChange(s: PeerConnection.IceConnectionState?) {}
                 override fun onSignalingChange(s: PeerConnection.SignalingState?) {}
-                override fun onIceGatheringChange(s: PeerConnection.IceGatheringState?) {}
                 override fun onIceCandidatesRemoved(c: Array<IceCandidate>?) {}
                 override fun onAddStream(s: MediaStream?) {}
                 override fun onRemoveStream(s: MediaStream?) {}
@@ -128,16 +134,17 @@ class WebRTCCameraKidClient(
 
     // ─── Create & send offer ──────────────────────────────────────────
     private fun createAndSendOffer() {
-        pendingRemoteIce.clear()
+        offerSent = false
         if (!setupPeerConnectionWithVideo()) {
-            Log.e(TAG, "Cannot create offer")
+            Log.e(TAG, "Cannot create offer — camera setup failed")
             return
         }
         pc?.createOffer(object : SdpObserver {
             override fun onCreateSuccess(sdp: SessionDescription) {
                 pc?.setLocalDescription(object : SdpObserver {
                     override fun onSetSuccess() {
-                        signaling.send("offer", JSONObject().apply { put("sdp", sdp.description) })
+                        Log.d(TAG, "Local description set — waiting for ICE gathering")
+                        // Offer sent from onIceGatheringChange(COMPLETE)
                     }
                     override fun onCreateSuccess(s: SessionDescription?) {}
                     override fun onCreateFailure(e: String?) {}
@@ -154,7 +161,6 @@ class WebRTCCameraKidClient(
     fun switchCamera(front: Boolean) {
         facingFront = front
         if (capturer == null) return
-        val enumerator = Camera2Enumerator(context)
         val newId = getCameraId()
         if (newId.isNotEmpty()) {
             capturer?.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {
@@ -182,7 +188,6 @@ class WebRTCCameraKidClient(
                 }
                 "switch" -> {
                     val front = payload.optBoolean("front", false)
-                    Log.d(TAG, "Parent requested camera switch: front=$front")
                     switchCamera(front)
                 }
                 "answer" -> {
@@ -190,8 +195,7 @@ class WebRTCCameraKidClient(
                     if (sdp.isNotEmpty() && pc != null) {
                         pc!!.setRemoteDescription(object : SdpObserver {
                             override fun onSetSuccess() {
-                                pendingRemoteIce.forEach { pc?.addIceCandidate(it) }
-                                pendingRemoteIce.clear()
+                                Log.d(TAG, "Remote answer set — ICE connecting")
                             }
                             override fun onCreateSuccess(s: SessionDescription?) {}
                             override fun onCreateFailure(e: String?) {}
@@ -199,15 +203,7 @@ class WebRTCCameraKidClient(
                         }, SessionDescription(SessionDescription.Type.ANSWER, sdp))
                     }
                 }
-                "ice-parent" -> {
-                    val candidate = IceCandidate(
-                        payload.optString("sdpMid"),
-                        payload.optInt("sdpMLineIndex"),
-                        payload.optString("candidate")
-                    )
-                    if (pc?.remoteDescription != null) pc?.addIceCandidate(candidate)
-                    else pendingRemoteIce.add(candidate)
-                }
+                // No ice-parent handler needed — vanilla ICE embeds all candidates in SDP
             }
         }
 
@@ -217,7 +213,7 @@ class WebRTCCameraKidClient(
 
     // ─── Stop ─────────────────────────────────────────────────────────
     fun stop() {
-        try { releaseCamera() } catch (e: Exception) { }
+        try { releaseCamera() } catch (_: Exception) {}
         pc?.close()
         factory?.dispose()
         eglBase?.release()

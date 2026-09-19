@@ -3,7 +3,6 @@ package com.parentalcontrol.parentview
 import android.content.Intent
 import android.os.Bundle
 import android.text.InputFilter
-import android.text.InputType
 import android.view.Gravity
 import android.view.Menu
 import android.view.MenuItem
@@ -11,20 +10,25 @@ import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.google.firebase.database.*
+import kotlinx.coroutines.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
  * Parent dashboard.
  *
  * Supports multiple kid devices — each with its OWN unique pairing key.
- * Maintains one Firebase listener per paired key and merges all device lists.
- *
- * Menu:
- *   ➕ Add Kid Device   — enter another key (new kid phone)
- *   🔑 Manage Devices  — see/remove paired keys
+ * Polls Supabase Postgres (REST) every 15 s to refresh the device list.
+ * All signaling (live screen / camera WebRTC) uses Supabase Realtime (WebSocket).
+ * Zero Firebase dependencies.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -34,18 +38,25 @@ class MainActivity : AppCompatActivity() {
 
     private val prefs by lazy { getSharedPreferences(PairingActivity.PREFS_NAME, MODE_PRIVATE) }
 
-    /** Map of pairingKey → active Firebase listener */
-    private val listeners = mutableMapOf<String, ValueEventListener>()
-    /** Map of pairingKey → DatabaseReference */
-    private val refs = mutableMapOf<String, DatabaseReference>()
-    /** Map of pairingKey → list of DeviceItems from that key's namespace */
+    /** Map of pairingKey → list of DeviceItems fetched from Supabase */
     private val devicesByKey = mutableMapOf<String, List<DeviceItem>>()
+
+    private var pollJob: Job? = null
+
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
+
+    private val supabaseUrl get() = BuildConfig.SUPABASE_URL
+    private val supabaseKey get() = BuildConfig.SUPABASE_KEY
 
     private val deviceAdapter = DeviceAdapter(
         onLiveScreen = { deviceId, pairingKey ->
             startActivity(Intent(this, LiveScreenActivity::class.java).apply {
-                putExtra("DEVICE_ID", deviceId)
-                putExtra("PAIRING_KEY", pairingKey)
+                putExtra("deviceId", deviceId)       // LiveScreenActivity expects camelCase
+                putExtra("deviceName", "")
+                putExtra("pairingKey", pairingKey)
             })
         },
         onLiveCamera = { deviceId, pairingKey ->
@@ -68,7 +79,6 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Guard: if no keys at all, show PairingActivity
         val keys = PairingActivity.getSavedKeys(prefs)
         if (keys.isEmpty()) {
             startActivity(Intent(this, PairingActivity::class.java).apply {
@@ -88,57 +98,82 @@ class MainActivity : AppCompatActivity() {
         rvDevices.layoutManager = LinearLayoutManager(this)
         rvDevices.adapter = deviceAdapter
 
-        // Start a Firebase listener for EACH saved pairing key
-        keys.forEach { key -> attachListener(key) }
+        startPolling()
     }
 
-    // ─── Firebase: one listener per pairing key ────────────────────────
-    private fun attachListener(pairingKey: String) {
-        progressBar.visibility = View.VISIBLE
-        val ref = FirebaseDatabase.getInstance().getReference("users/$pairingKey/devices")
-        refs[pairingKey] = ref
+    override fun onResume() {
+        super.onResume()
+        // Refresh immediately on resume
+        lifecycleScope.launch { fetchAllKeys() }
+    }
 
-        val listener = ref.addValueEventListener(object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                progressBar.visibility = View.GONE
+    override fun onDestroy() {
+        pollJob?.cancel()
+        super.onDestroy()
+    }
+
+    // ─── Supabase polling ──────────────────────────────────────────────
+    private fun startPolling() {
+        pollJob?.cancel()
+        pollJob = lifecycleScope.launch {
+            while (isActive) {
+                fetchAllKeys()
+                delay(15_000L) // refresh every 15 seconds
+            }
+        }
+    }
+
+    private suspend fun fetchAllKeys() {
+        val keys = PairingActivity.getSavedKeys(prefs)
+        keys.forEach { key -> fetchDevicesForKey(key) }
+    }
+
+    /** Fetch all devices for one pairing key from Supabase REST */
+    private suspend fun fetchDevicesForKey(pairingKey: String) = withContext(Dispatchers.IO) {
+        try {
+            val url = "$supabaseUrl/rest/v1/devices?select=*&pairing_key=eq.$pairingKey"
+            val request = Request.Builder()
+                .url(url)
+                .header("apikey", supabaseKey)
+                .header("Authorization", "Bearer $supabaseKey")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+
+            http.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext
+                val body = resp.body?.string() ?: return@withContext
+                val arr = JSONArray(body)
                 val devices = mutableListOf<DeviceItem>()
 
-                for (child in snapshot.children) {
-                    val deviceId     = child.key ?: continue
-                    val info         = child.child("info")
-                    val model        = info.child("model").getValue(String::class.java) ?: "Unknown"
-                    val manufacturer = info.child("manufacturer").getValue(String::class.java) ?: ""
-                    val lastSeen     = info.child("lastSeen").getValue(Long::class.java) ?: 0L
-                    val hasLiveFrame = child.hasChild("liveFrame")
+                for (i in 0 until arr.length()) {
+                    val obj          = arr.getJSONObject(i)
+                    val deviceId     = obj.optString("id")
+                    val model        = obj.optString("model", "Unknown")
+                    val manufacturer = obj.optString("manufacturer", "")
+                    val lastSeen     = obj.optLong("last_seen", 0L)
+                    val hasLiveFrame = false // checked via live_frames table; simplified here
 
-                    devices.add(DeviceItem(
-                        deviceId   = deviceId,
-                        deviceName = "$manufacturer $model".trim(),
-                        lastSeenMs = lastSeen,
-                        hasLiveFrame = hasLiveFrame,
-                        pairingKey = pairingKey
-                    ))
+                    devices.add(
+                        DeviceItem(
+                            deviceId   = deviceId,
+                            deviceName = "$manufacturer $model".trim(),
+                            lastSeenMs = lastSeen,
+                            hasLiveFrame = hasLiveFrame,
+                            pairingKey = pairingKey
+                        )
+                    )
                 }
 
-                devicesByKey[pairingKey] = devices
-                rebuildList()
+                withContext(Dispatchers.Main) {
+                    devicesByKey[pairingKey] = devices
+                    progressBar.visibility = View.GONE
+                    rebuildList()
+                }
             }
-
-            override fun onCancelled(error: DatabaseError) {
-                progressBar.visibility = View.GONE
-                Toast.makeText(this@MainActivity, "Error: ${error.message}", Toast.LENGTH_SHORT).show()
-            }
-        })
-
-        listeners[pairingKey] = listener
-    }
-
-    private fun detachListener(pairingKey: String) {
-        listeners[pairingKey]?.let { refs[pairingKey]?.removeEventListener(it) }
-        listeners.remove(pairingKey)
-        refs.remove(pairingKey)
-        devicesByKey.remove(pairingKey)
-        rebuildList()
+        } catch (e: Exception) {
+            // Silently fail — will retry in 15s
+        }
     }
 
     /** Merge all per-key device lists, sort by last seen, update adapter */
@@ -154,6 +189,44 @@ class MainActivity : AppCompatActivity() {
             rvDevices.visibility = View.VISIBLE
             deviceAdapter.submitList(all)
         }
+    }
+
+    // ─── Delete device from Supabase ───────────────────────────────────
+    private fun confirmDelete(deviceId: String, deviceName: String, pairingKey: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Remove Device")
+            .setMessage("Remove \"$deviceName\" from the list?\n\nThis deletes all its data. The Kid Monitor app will re-register next time it runs.")
+            .setPositiveButton("Remove") { _, _ ->
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        // DELETE /rest/v1/devices?id=eq.{deviceId}
+                        val request = Request.Builder()
+                            .url("$supabaseUrl/rest/v1/devices?id=eq.$deviceId")
+                            .header("apikey", supabaseKey)
+                            .header("Authorization", "Bearer $supabaseKey")
+                            .delete()
+                            .build()
+                        http.newCall(request).execute().use { resp ->
+                            withContext(Dispatchers.Main) {
+                                if (resp.isSuccessful) {
+                                    Toast.makeText(this@MainActivity, "✅ Device removed", Toast.LENGTH_SHORT).show()
+                                    devicesByKey[pairingKey] = devicesByKey[pairingKey]
+                                        ?.filter { it.deviceId != deviceId } ?: emptyList()
+                                    rebuildList()
+                                } else {
+                                    Toast.makeText(this@MainActivity, "❌ Failed: ${resp.code}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@MainActivity, "❌ Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     // ─── Options Menu ──────────────────────────────────────────────────
@@ -198,7 +271,7 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         keys.add(key)
                         PairingActivity.saveKeys(prefs, keys)
-                        attachListener(key)
+                        lifecycleScope.launch { fetchDevicesForKey(key) }
                         Toast.makeText(this, "✅ Device added!", Toast.LENGTH_SHORT).show()
                     }
                 } else {
@@ -233,10 +306,10 @@ class MainActivity : AppCompatActivity() {
                         val updated = PairingActivity.getSavedKeys(prefs).toMutableSet()
                         updated.remove(key)
                         PairingActivity.saveKeys(prefs, updated)
-                        detachListener(key)
+                        devicesByKey.remove(key)
+                        rebuildList()
                         Toast.makeText(this, "Key removed", Toast.LENGTH_SHORT).show()
 
-                        // If no keys left, go back to pairing screen
                         if (updated.isEmpty()) {
                             startActivity(Intent(this, PairingActivity::class.java).apply {
                                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
@@ -251,32 +324,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ─── Delete a device's data from Firebase ─────────────────────────
-    private fun confirmDelete(deviceId: String, deviceName: String, pairingKey: String) {
-        AlertDialog.Builder(this)
-            .setTitle("Remove Device")
-            .setMessage("Remove \"$deviceName\" from the list?\n\nThis deletes all its data. The Kid Monitor app will re-register next time it runs.")
-            .setPositiveButton("Remove") { _, _ ->
-                FirebaseDatabase.getInstance()
-                    .getReference("users/$pairingKey/devices/$deviceId")
-                    .removeValue()
-                    .addOnSuccessListener {
-                        Toast.makeText(this, "✅ Device removed", Toast.LENGTH_SHORT).show()
-                    }
-                    .addOnFailureListener { e ->
-                        Toast.makeText(this, "❌ Failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                    }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    override fun onDestroy() {
-        // Detach all listeners
-        listeners.forEach { (key, listener) -> refs[key]?.removeEventListener(listener) }
-        super.onDestroy()
-    }
-
     companion object {
         private const val MENU_ADD_KID = 1001
         private const val MENU_MANAGE  = 1002
@@ -289,15 +336,15 @@ data class DeviceItem(
     val deviceName: String,
     val lastSeenMs: Long,
     val hasLiveFrame: Boolean,
-    val pairingKey: String        // which key this device belongs to
+    val pairingKey: String
 )
 
 // ─── Adapter ──────────────────────────────────────────────────────────────────
 class DeviceAdapter(
-    private val onLiveScreen: (String, String) -> Unit,   // deviceId, pairingKey
+    private val onLiveScreen: (String, String) -> Unit,
     private val onLiveCamera: (String, String) -> Unit,
     private val onAppUsage:   (String, String) -> Unit,
-    private val onDelete:     (String, String, String) -> Unit  // deviceId, name, pairingKey
+    private val onDelete:     (String, String, String) -> Unit
 ) : RecyclerView.Adapter<DeviceAdapter.VH>() {
 
     private var items = listOf<DeviceItem>()
@@ -329,13 +376,13 @@ class DeviceAdapter(
         holder.tvName.text = item.deviceName
 
         val ageMs   = System.currentTimeMillis() - item.lastSeenMs
-        val ageMins = TimeUnit.MILLISECONDS.toMinutes(ageMs)
+        val ageMins = java.util.concurrent.TimeUnit.MILLISECONDS.toMinutes(ageMs)
         val isOnline = ageMins < 2
 
         holder.tvLastSeen.text = when {
             ageMins < 2  -> "🟢 Online now"
             ageMins < 60 -> "🟡 ${ageMins}m ago"
-            else         -> "🔴 ${TimeUnit.MILLISECONDS.toHours(ageMs)}h ago"
+            else         -> "🔴 ${java.util.concurrent.TimeUnit.MILLISECONDS.toHours(ageMs)}h ago"
         }
 
         holder.tvStatus.text = if (isOnline) "LIVE" else "OFFLINE"
