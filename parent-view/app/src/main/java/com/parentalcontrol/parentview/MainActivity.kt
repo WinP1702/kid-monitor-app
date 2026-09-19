@@ -73,6 +73,9 @@ class MainActivity : AppCompatActivity() {
         },
         onDelete = { deviceId, deviceName, pairingKey ->
             confirmDelete(deviceId, deviceName, pairingKey)
+        },
+        onRename = { deviceId, currentName ->
+            showRenameDialog(deviceId, currentName)
         }
     )
 
@@ -154,10 +157,13 @@ class MainActivity : AppCompatActivity() {
                     val lastSeen     = obj.optLong("last_seen", 0L)
                     val hasLiveFrame = false // checked via live_frames table; simplified here
 
+                    val defaultName = "$manufacturer $model".trim()
+                    val customName = prefs.getString("custom_name_$deviceId", null)
+
                     devices.add(
                         DeviceItem(
                             deviceId   = deviceId,
-                            deviceName = "$manufacturer $model".trim(),
+                            deviceName = customName ?: defaultName,
                             lastSeenMs = lastSeen,
                             hasLiveFrame = hasLiveFrame,
                             pairingKey = pairingKey
@@ -223,6 +229,35 @@ class MainActivity : AppCompatActivity() {
                             Toast.makeText(this@MainActivity, "❌ Error: ${e.message}", Toast.LENGTH_SHORT).show()
                         }
                     }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ─── Rename device ──────────────────────────────────────────────────
+    private fun showRenameDialog(deviceId: String, currentName: String) {
+        val input = EditText(this).apply {
+            hint = "New device name"
+            setText(currentName)
+            setSelection(currentName.length)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            gravity = Gravity.CENTER_HORIZONTAL
+            textSize = 18f
+            setPadding(48, 32, 48, 32)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Rename Device")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isNotEmpty()) {
+                    prefs.edit().putString("custom_name_$deviceId", newName).apply()
+                    // Update UI immediately without waiting for Supabase if preferred,
+                    // or just refetch. Refetching is easier:
+                    lifecycleScope.launch { fetchAllKeys() }
+                    Toast.makeText(this@MainActivity, "Device renamed", Toast.LENGTH_SHORT).show()
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -344,7 +379,8 @@ class DeviceAdapter(
     private val onLiveScreen: (String, String) -> Unit,
     private val onLiveCamera: (String, String) -> Unit,
     private val onAppUsage:   (String, String) -> Unit,
-    private val onDelete:     (String, String, String) -> Unit
+    private val onDelete:     (String, String, String) -> Unit,
+    private val onRename:     (String, String) -> Unit
 ) : RecyclerView.Adapter<DeviceAdapter.VH>() {
 
     private var items = listOf<DeviceItem>()
@@ -363,6 +399,7 @@ class DeviceAdapter(
         val btnCamera:     Button   = view.findViewById(R.id.btnLiveCamera)
         val btnUsage:      Button   = view.findViewById(R.id.btnAppUsage)
         val btnDelete:     Button   = view.findViewById(R.id.btnDeleteDevice)
+        val btnRename:     TextView = view.findViewById(R.id.btnRenameDevice)
     }
 
     override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): VH {
@@ -400,6 +437,7 @@ class DeviceAdapter(
         holder.btnCamera.setOnClickListener { onLiveCamera(item.deviceId, item.pairingKey) }
         holder.btnUsage.setOnClickListener  { onAppUsage(item.deviceId, item.pairingKey) }
         holder.btnDelete.setOnClickListener { onDelete(item.deviceId, item.deviceName, item.pairingKey) }
+        holder.btnRename.setOnClickListener { onRename(item.deviceId, item.deviceName) }
     }
 
     override fun getItemCount() = items.size
