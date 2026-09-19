@@ -11,6 +11,7 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.CountDownTimer
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -51,6 +52,9 @@ class SetupActivity : AppCompatActivity() {
 
     private val prefs by lazy { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** Auto-hide countdown timer — cancelled if user taps any dialog button first. */
+    private var autoHideTimer: CountDownTimer? = null
 
     // ─── Permission Launchers ─────────────────────────────────────────
     private val notifPermLauncher = registerForActivityResult(
@@ -131,6 +135,13 @@ class SetupActivity : AppCompatActivity() {
 
         btnAction.setOnClickListener { nextStep() }
         nextStep()
+    }
+
+    override fun onDestroy() {
+        // Cancel auto-hide timer to prevent memory leak if activity is killed mid-countdown
+        autoHideTimer?.cancel()
+        autoHideTimer = null
+        super.onDestroy()
     }
 
     // ─── Pairing Key + Device ID ─────────────────────────────────────
@@ -245,6 +256,10 @@ class SetupActivity : AppCompatActivity() {
 
     // ─── Pairing key dialog ───────────────────────────────────────────
     /**
+     * Shows the pairing key and starts a 10-second countdown.
+     * The icon is hidden automatically when the timer reaches 0, or
+     * immediately if the user taps any button.
+     *
      * @param afterSetup  true = fresh setup just finished (icon not hidden yet)
      *                    false = reopened app with setup already done
      */
@@ -255,29 +270,52 @@ class SetupActivity : AppCompatActivity() {
         // Record that we showed the key
         prefs.edit().putBoolean(KEY_KEY_SHOWN, true).apply()
 
-        val message = "Your device pairing key:\n\n" +
+        fun buildMessage(secsLeft: Int): String =
+            "Your device pairing key:\n\n" +
             "        $key\n\n" +
             "Open the Parent Monitor app and tap\n" +
             "\"➕ Add Kid Device\", then enter this key.\n\n" +
-            "Keep it private — only share with trusted parents."
+            "Keep it private — only share with trusted parents.\n\n" +
+            "⏱ This screen closes in $secsLeft second${if (secsLeft == 1) "" else "s"}..."
 
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("📱 Pairing Key")
-            .setMessage(message)
+            .setMessage(buildMessage(10))
             .setPositiveButton("📋 Copy & Done") { _, _ ->
+                autoHideTimer?.cancel()
+                autoHideTimer = null
                 copyKey(key)
                 onDialogDismissed(afterSetup)
             }
             .setNegativeButton("Done") { _, _ ->
+                autoHideTimer?.cancel()
+                autoHideTimer = null
                 onDialogDismissed(afterSetup)
             }
             .setNeutralButton("Show Again Next Time") { _, _ ->
-                // Reset flag so it shows again
+                autoHideTimer?.cancel()
+                autoHideTimer = null
+                // Reset flag so it shows again on next launch
                 prefs.edit().putBoolean(KEY_KEY_SHOWN, false).apply()
                 onDialogDismissed(afterSetup)
             }
             .setCancelable(false)
             .show()
+
+        // ── 10-second auto-hide countdown ────────────────────────────
+        autoHideTimer = object : CountDownTimer(10_000L, 1_000L) {
+            override fun onTick(millisUntilFinished: Long) {
+                val secsLeft = ((millisUntilFinished + 999L) / 1_000L).toInt()
+                if (dialog.isShowing) {
+                    dialog.setMessage(buildMessage(secsLeft))
+                }
+            }
+            override fun onFinish() {
+                autoHideTimer = null
+                if (dialog.isShowing) dialog.dismiss()
+                onDialogDismissed(afterSetup)
+            }
+        }.start()
     }
 
     private fun onDialogDismissed(afterSetup: Boolean) {

