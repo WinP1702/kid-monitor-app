@@ -74,3 +74,6 @@ cd parent-view
 
 ## License
 MIT
+
+## Changelog
+- **[Latest]** New written on github - Minor fixes and code cleanup.
