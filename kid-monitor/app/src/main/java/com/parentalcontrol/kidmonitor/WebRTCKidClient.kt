@@ -85,7 +85,15 @@ class WebRTCKidClient(
                 projectionData,
                 object : MediaProjection.Callback() {
                     override fun onStop() {
-                        Log.w(TAG, "MediaProjection stopped")
+                        // Android revoked the MediaProjection (e.g. user dismissed the
+                        // "Screen share" notification, OEM battery saver killed it, or
+                        // the system's ~24h auto-expiry fired).
+                        // Ask MonitorService to request a fresh grant via the trampoline.
+                        Log.w(TAG, "MediaProjection stopped — requesting fresh grant")
+                        val trampolineIntent = Intent(context, ProjectionRequestActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(trampolineIntent)
                     }
                 }
             )
@@ -193,7 +201,12 @@ class WebRTCKidClient(
         }
 
         signaling.onConnected = {
-            Log.d(TAG, "Screen signaling ready — waiting for parent request")
+            Log.d(TAG, "Screen signaling (re)connected — resetting stale peer connection")
+            // Close any stale PeerConnection from before the signaling drop.
+            // This ensures the kid is in a clean state when the parent sends the next request.
+            offerSent = false
+            pc?.close()
+            pc = null
         }
 
         signaling.connect()

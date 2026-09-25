@@ -20,6 +20,9 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 /**
@@ -131,7 +134,6 @@ class MainActivity : AppCompatActivity() {
         keys.forEach { key -> fetchDevicesForKey(key) }
     }
 
-    /** Fetch all devices for one pairing key from Supabase REST */
     private suspend fun fetchDevicesForKey(pairingKey: String) = withContext(Dispatchers.IO) {
         try {
             val url = "$supabaseUrl/rest/v1/devices?select=*&pairing_key=eq.$pairingKey"
@@ -144,7 +146,10 @@ class MainActivity : AppCompatActivity() {
                 .build()
 
             http.newCall(request).execute().use { resp ->
-                if (!resp.isSuccessful) return@withContext
+                if (!resp.isSuccessful) {
+                    android.util.Log.e("MainActivity", "fetchDevices failed: ${resp.code} for key $pairingKey")
+                    return@withContext
+                }
                 val body = resp.body?.string() ?: return@withContext
                 val arr = JSONArray(body)
                 val devices = mutableListOf<DeviceItem>()
@@ -154,7 +159,11 @@ class MainActivity : AppCompatActivity() {
                     val deviceId     = obj.optString("id")
                     val model        = obj.optString("model", "Unknown")
                     val manufacturer = obj.optString("manufacturer", "")
-                    val lastSeen     = obj.optLong("last_seen", 0L)
+
+                    // last_seen is stored as epoch-ms (bigint) but Supabase may return an
+                    // ISO-8601 string if the column type is "timestamp". Handle both.
+                    val lastSeen = parseLastSeen(obj)
+
                     val hasLiveFrame = false // checked via live_frames table; simplified here
 
                     val defaultName = "$manufacturer $model".trim()
@@ -178,7 +187,33 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         } catch (e: Exception) {
-            // Silently fail — will retry in 15s
+            android.util.Log.e("MainActivity", "fetchDevicesForKey exception for key $pairingKey: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Parse the `last_seen` field which can be:
+     *  - A JSON number (Long) when the Supabase column is `bigint` (epoch ms)
+     *  - An ISO-8601 string when the column is `timestamp` / `timestamptz`
+     * Returns 0 if parsing fails so the device shows as "offline" rather than crashing.
+     */
+    private fun parseLastSeen(obj: JSONObject): Long {
+        // Try numeric first (most common — bigint column)
+        val numeric = obj.opt("last_seen")
+        if (numeric is Number) return numeric.toLong()
+
+        // Try ISO-8601 string (timestamp column)
+        val str = obj.optString("last_seen", "").takeIf { it.isNotEmpty() } ?: return 0L
+        return try {
+            val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("UTC")
+            }
+            // Supabase may include fractional seconds and timezone offset
+            val cleaned = str.replace(Regex("\\.\\d+"), "").replace(Regex("[+-]\\d{2}:\\d{2}$"), "").trimEnd('Z')
+            sdf.parse(cleaned)?.time ?: 0L
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "Could not parse last_seen='$str': ${e.message}")
+            0L
         }
     }
 
@@ -414,7 +449,9 @@ class DeviceAdapter(
 
         val ageMs   = System.currentTimeMillis() - item.lastSeenMs
         val ageMins = java.util.concurrent.TimeUnit.MILLISECONDS.toMinutes(ageMs)
-        val isOnline = ageMins < 2
+        // Kid sends a heartbeat every 90 seconds. Use a 6-min threshold so the
+        // device stays "Online" even if 3-4 heartbeats in a row are delayed.
+        val isOnline = ageMins < 6
 
         holder.tvLastSeen.text = when {
             ageMins < 2  -> "🟢 Online now"

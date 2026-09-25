@@ -18,9 +18,19 @@ android {
         versionName "1.0"
         buildConfigField "String", "SUPABASE_URL", '"https://tyqdiqppcxckpzbqpilo.supabase.co"'
         buildConfigField "String", "SUPABASE_KEY", '"sb_publishable_PMvnpHm8yDC7YX0IzenR9g_XKn2_eT7"'
+
+        // Only include arm64 native libs — covers 99%+ of modern devices
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
     }
 
     buildTypes {
+        debug {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
         release {
             minifyEnabled true
             shrinkResources true
@@ -44,8 +54,6 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'com.google.android.material:material:1.12.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.2.1'
-    implementation 'androidx.lifecycle:lifecycle-service:2.9.1'
-    implementation 'androidx.work:work-runtime-ktx:2.10.1'
 
     // WebRTC (screen capture + P2P streaming)
     implementation 'io.github.webrtc-sdk:android:125.6422.06.1'
@@ -55,7 +63,4 @@ dependencies {
 
     // Coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1'
-
-    // Gson
-    implementation 'com.google.code.gson:gson:2.10.1'
 }

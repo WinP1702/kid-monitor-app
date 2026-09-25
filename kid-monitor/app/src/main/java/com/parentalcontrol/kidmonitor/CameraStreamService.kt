@@ -96,6 +96,12 @@ class CameraStreamService : Service() {
         }
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Returning START_STICKY so Android auto-restarts the service after a kill.
+        // onCreate() already handles re-initialization on restart (reads from prefs).
+        return START_STICKY
+    }
+
     override fun onDestroy() {
         cameraClient?.stop()
         cameraClient = null

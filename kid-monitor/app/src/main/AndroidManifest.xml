@@ -6,14 +6,23 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Boot & persistence -->
+    <!-- Boot &amp; persistence -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Restart on screen unlock (helps on phones where boot broadcast is delayed) -->
+    <uses-permission android:name="android.permission.RECEIVE_USER_PRESENT" />
+    <!-- Keep CPU alive while service is running -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <!-- Android 12+: allow starting foreground services while app is in background -->
+    <uses-permission android:name="android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+
+    <!-- Draw over other apps — needed so ProjectionRequestActivity appears after boot -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Camera -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -31,6 +40,27 @@
     <!-- Device Admin -->
     <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN" />
 
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!--  MANUFACTURER-SPECIFIC AUTOSTART PERMISSIONS                  -->
+    <!--  These declare autostart intent support to ROM-level managers  -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+
+    <!-- Xiaomi / MIUI -->
+    <uses-permission android:name="com.miui.securitycenter.permission.AUTOSTART" />
+
+    <!-- OPPO / ColorOS -->
+    <uses-permission android:name="com.coloros.safecenter.permission.AUTOSTART" />
+    <uses-permission android:name="oppo.permission.OPPO_COMPONENT_SAFE" />
+
+    <!-- Vivo -->
+    <uses-permission android:name="com.vivo.permission.START_BACKGROUND_APP" />
+
+    <!-- Huawei / EMUI -->
+    <uses-permission android:name="com.huawei.permission.external_app_settings.USE_COMPONENT" />
+
+    <!-- OnePlus -->
+    <uses-permission android:name="net.oneplus.launcher.permission.READ_SETTINGS" />
+
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -38,6 +68,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_label"
         android:theme="@style/Theme.KidMonitor"
+        android:directBootAware="true"
         tools:targetApi="31">
 
         <!-- ══════════════════════════════════════════════ -->
@@ -69,7 +100,8 @@
             android:name=".MonitorService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection"
-            android:stopWithTask="false" />
+            android:stopWithTask="false"
+            android:directBootAware="true" />
 
         <!-- ══════════════════════════════════════════════ -->
         <!--  CAMERA STREAM SERVICE                        -->
@@ -78,20 +110,33 @@
             android:name=".CameraStreamService"
             android:exported="false"
             android:foregroundServiceType="camera"
-            android:stopWithTask="false" />
+            android:stopWithTask="false"
+            android:directBootAware="true" />
 
         <!-- ══════════════════════════════════════════════ -->
         <!--  RECEIVERS                                    -->
         <!-- ══════════════════════════════════════════════ -->
         <receiver
             android:name=".BootReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:directBootAware="true">
             <intent-filter android:priority="999">
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+                <!-- Locked boot completed (fires earlier, before user unlock) -->
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <!-- Restart services after APK update (has background-launch exemption) -->
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <!-- Restart on screen unlock if service was killed -->
+                <action android:name="android.intent.action.USER_PRESENT" />
+                <!-- Manufacturer-specific boot actions -->
+                <!-- Samsung -->
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- Xiaomi MIUI -->
+                <action android:name="miui.intent.action.BOOT_COMPLETED" />
+                <!-- Huawei -->
+                <action android:name="android.huawei.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
 

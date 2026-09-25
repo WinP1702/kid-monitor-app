@@ -6,7 +6,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.*
 import android.util.Log
-import androidx.lifecycle.LifecycleService
+
 import kotlinx.coroutines.*
 import java.util.UUID
 
@@ -18,7 +18,11 @@ import java.util.UUID
  * - Passes the live MediaProjection object to WebRTCKidClient (not the raw Intent)
  * - Writes device info + app usage to Supabase Postgres via SupabaseManager
  */
-class MonitorService : LifecycleService() {
+class MonitorService : Service() {
+
+    override fun onBind(intent: Intent?): IBinder? {
+        return null
+    }
 
     private lateinit var supabaseManager: SupabaseManager
     private lateinit var usageStatsHelper: UsageStatsHelper
@@ -26,6 +30,7 @@ class MonitorService : LifecycleService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var usageJob: Job? = null
+    private var heartbeatJob: Job? = null
 
     private val prefs by lazy { getSharedPreferences(SetupActivity.PREFS_NAME, MODE_PRIVATE) }
     private val deviceId: String by lazy {
@@ -87,19 +92,34 @@ class MonitorService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
 
-        if (intent?.action == ACTION_START) {
-            val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
-            val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra<Intent>(EXTRA_DATA)
-            }
+        when {
+            intent?.action == ACTION_START -> {
+                // Fresh start with a new MediaProjection grant
+                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
+                val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra<Intent>(EXTRA_DATA)
+                }
 
-            if (resultCode == Activity.RESULT_OK && data != null) {
-                startMonitoring(resultCode, data)
-            } else {
-                Log.e(TAG, "Missing projection data: resultCode=$resultCode")
+                if (resultCode == Activity.RESULT_OK && data != null) {
+                    startMonitoring(resultCode, data)
+                } else {
+                    Log.e(TAG, "Missing projection data: resultCode=$resultCode")
+                }
+            }
+            intent == null -> {
+                // STICKY restart after Android killed the service.
+                // The old MediaProjection token is now invalid — request a fresh one.
+                // BootReceiver / ProjectionRequestActivity already handles this pattern.
+                Log.w(TAG, "STICKY restart with null intent — requesting fresh MediaProjection")
+                if (!isRunning || webRTCKidClient == null) {
+                    val trampolineIntent = Intent(this, ProjectionRequestActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(trampolineIntent)
+                }
             }
         }
 
@@ -108,6 +128,7 @@ class MonitorService : LifecycleService() {
 
     override fun onDestroy() {
         isRunning = false
+        heartbeatJob?.cancel()
         usageJob?.cancel()
         serviceScope.cancel()
         webRTCKidClient?.stop()
@@ -137,13 +158,26 @@ class MonitorService : LifecycleService() {
         webRTCKidClient!!.start()
         Log.d(TAG, "WebRTC screen client started for device $deviceId")
 
+        // Dedicated heartbeat — fires every 90 seconds to keep last_seen fresh.
+        // This is separate from the 5-min usage loop so the parent always sees
+        // the device as "online" even when no usage stats are ready to upload.
+        heartbeatJob = serviceScope.launch {
+            while (isActive) {
+                try {
+                    supabaseManager.writeStatus("WebRTC ready")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Heartbeat: ${e.message}")
+                }
+                delay(90_000L) // 90 seconds
+            }
+        }
+
         // App usage stats loop — every 5 minutes
         usageJob = serviceScope.launch {
             while (isActive) {
                 try {
                     val stats = usageStatsHelper.getUsageStats()
                     supabaseManager.uploadUsageStats(stats)
-                    supabaseManager.writeStatus("WebRTC ready")
                 } catch (e: Exception) {
                     Log.e(TAG, "Usage upload: ${e.message}")
                 }

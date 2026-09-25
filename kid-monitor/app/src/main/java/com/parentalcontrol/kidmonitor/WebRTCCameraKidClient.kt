@@ -23,6 +23,7 @@ class WebRTCCameraKidClient(
     private var factory: PeerConnectionFactory? = null
     private var pc: PeerConnection? = null
     private var capturer: Camera2Capturer? = null
+    private var videoSource: VideoSource? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var eglBase: EglBase? = null
 
@@ -82,13 +83,14 @@ class WebRTCCameraKidClient(
             }
 
             capturer = Camera2Capturer(context, cameraId, null)
-            val videoSource = factory!!.createVideoSource(false)
+            val vs = factory!!.createVideoSource(false)
+            videoSource = vs
             surfaceTextureHelper = SurfaceTextureHelper.create("CamThread", eglBase!!.eglBaseContext)
-            capturer!!.initialize(surfaceTextureHelper, context, videoSource.capturerObserver)
+            capturer!!.initialize(surfaceTextureHelper, context, vs.capturerObserver)
             capturer!!.startCapture(1280, 720, 30)
             Log.d(TAG, "Camera capture started: $cameraId (front=$facingFront)")
 
-            val videoTrack = factory!!.createVideoTrack("cam0", videoSource)
+            val videoTrack = factory!!.createVideoTrack("cam0", vs)
 
             val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
                 sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
@@ -237,6 +239,8 @@ class WebRTCCameraKidClient(
         try { capturer?.stopCapture() } catch (_: Exception) {}
         capturer?.dispose()
         capturer = null
+        videoSource?.dispose()
+        videoSource = null
         surfaceTextureHelper?.dispose()
         surfaceTextureHelper = null
     }

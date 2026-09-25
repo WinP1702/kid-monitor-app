@@ -36,7 +36,10 @@ class SupabaseSignaling(
         .build()
 
     private val refCounter = AtomicInteger(1)
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    // Scope is recreated each time connect() is called so that reconnects work
+    // correctly even after disconnect() was previously called (which cancels the old scope).
+    @Volatile private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     @Volatile private var joined = false
     private var heartbeatJob: Job? = null
@@ -46,6 +49,10 @@ class SupabaseSignaling(
     var onDisconnected: (() -> Unit)? = null
 
     fun connect() {
+        // Cancel the old scope and create a fresh one so coroutines launched here
+        // (heartbeat, reconnect delay) always have an active scope to run in.
+        scope.cancel()
+        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         joined = false
         val request = Request.Builder()
             .url(wsUrl)
@@ -128,9 +135,16 @@ class SupabaseSignaling(
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                Log.d(TAG, "WS closed: $reason")
+                Log.w(TAG, "WS closed (code=$code): $reason — reconnecting in 5s")
                 joined = false
                 onDisconnected?.invoke()
+                // Supabase Realtime closes the socket with code 1000 on server-side
+                // idle timeout (~60 s without a heartbeat) or after a network blip.
+                // Without reconnecting here the signaling channel stays dead forever.
+                scope.launch {
+                    delay(5_000)
+                    if (isActive) connect()
+                }
             }
         })
     }

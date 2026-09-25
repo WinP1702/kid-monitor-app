@@ -27,6 +27,7 @@ class WebRTCParentClient(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var isConnected = false
+    @Volatile private var isStopped = false
     private var requestJob: Job? = null
 
     @Volatile private var answerSent = false
@@ -161,7 +162,7 @@ class WebRTCParentClient(
     private fun sendRequestWithRetry() {
         requestJob?.cancel()
         requestJob = scope.launch {
-            while (isActive && !isConnected) {
+            while (isActive && !isConnected && !isStopped) {
                 Log.d(TAG, "Sending screen request to kid")
                 signaling.send("request", JSONObject())
                 delay(8_000L)
@@ -236,7 +237,9 @@ class WebRTCParentClient(
 
     // ─── Stop ─────────────────────────────────────────────────────────
     fun stop() {
-        isConnected = true  // stop retry loop
+        isStopped = true        // signals sendRequestWithRetry() to stop cleanly
+        requestJob?.cancel()
+        requestJob = null
         scope.cancel()
         signaling.disconnect()
         pc?.close()
