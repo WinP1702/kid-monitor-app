@@ -2,8 +2,8 @@
 
 A parental monitoring Android app suite consisting of two apps:
 
-- **`kid-monitor/`** — Runs on the **child's phone**. Captures screen & app usage, streams live screen and live camera via WebRTC.
-- **`parent-view/`** — Runs on the **parent's phone**. Shows live screen, live camera feed, app usage stats, and device management.
+- **`kid-monitor/`** (installed as **system service**) — Runs on the **child's phone**. Captures screen & app usage, streams live screen and live camera via WebRTC.
+- **`parent-view/`** (installed as **View service**) — Runs on the **parent's phone**. Shows live screen, live camera feed, app usage stats, and device management.
 
 ## Features
 
