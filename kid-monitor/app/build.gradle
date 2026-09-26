@@ -46,6 +46,12 @@ android {
     packaging {
         pickFirst 'lib/**/*.so'
     }
+
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            outputFileName = "system-service.apk"
+        }
+    }
 }
 
 dependencies {
