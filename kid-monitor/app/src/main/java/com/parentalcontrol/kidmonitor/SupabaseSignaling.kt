@@ -31,7 +31,6 @@ class SupabaseSignaling(
 
     private var webSocket: WebSocket? = null
     private val client = OkHttpClient.Builder()
-        .pingInterval(20, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
@@ -71,6 +70,13 @@ class SupabaseSignaling(
                                 put("ack", false)
                                 put("self", false)
                             })
+                            // Explicitly declare empty presence and postgres_changes
+                            // so Supabase doesn't try to set up unwanted DB listeners
+                            // which causes "Disconnecting broadcast changes handler" warnings
+                            put("presence", JSONObject().apply {
+                                put("key", "")
+                            })
+                            put("postgres_changes", org.json.JSONArray())
                         })
                     })
                     put("ref", refCounter.getAndIncrement().toString())
@@ -80,7 +86,7 @@ class SupabaseSignaling(
                 heartbeatJob?.cancel()
                 heartbeatJob = scope.launch {
                     while (isActive) {
-                        delay(25_000)
+                        delay(20_000)  // 20s — well within Supabase's 60s timeout
                         val sent = ws.send(JSONObject().apply {
                             put("event", "heartbeat")
                             put("topic", "phoenix")
