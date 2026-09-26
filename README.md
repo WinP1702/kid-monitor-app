@@ -56,11 +56,11 @@ App usage (Firebase RTDB)                                     Device list (Fireb
 
 ### Build
 ```bash
-# Kid Monitor
+# Kid Monitor (outputs system-service-debug.apk)
 cd kid-monitor
 ./gradlew assembleDebug
 
-# Parent View
+# Parent View (outputs view-service-debug.apk)
 cd parent-view
 ./gradlew assembleDebug
 ```
@@ -76,4 +76,4 @@ cd parent-view
 MIT
 
 ## Changelog
-- **[Latest]** New written on github - Minor fixes and code cleanup.
+- **[Latest]** Renamed output APKs to `system-service-debug.apk` and `view-service-debug.apk`. Fixed WebRTC stale `PeerConnection` reuse for live streaming, Supabase Realtime broadcast disconnections, and offline status bugs.
