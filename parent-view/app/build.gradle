@@ -18,7 +18,7 @@ android {
         versionCode 1
         versionName "1.0"
         buildConfigField "String", "SUPABASE_URL", '"https://tyqdiqppcxckpzbqpilo.supabase.co"'
-        buildConfigField "String", "SUPABASE_KEY", '"sb_publishable_PMvnpHm8yDC7YX0IzenR9g_XKn2_eT7"'
+        buildConfigField "String", "SUPABASE_KEY", '"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR5cWRpcXBwY3hja3B6YnFwaWxvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyNzAwNzQsImV4cCI6MjEwNDg0NjA3NH0.4-faernAlY8LwOb99f5Qbk49LttA9qtoWHmR2veQ3NU"'
 
         // Only include arm64 native libs — covers 99%+ of modern devices
         ndk {
