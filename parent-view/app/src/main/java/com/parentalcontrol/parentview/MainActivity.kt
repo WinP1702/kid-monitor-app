@@ -202,8 +202,13 @@ class MainActivity : AppCompatActivity() {
         val numeric = obj.opt("last_seen")
         if (numeric is Number) return numeric.toLong()
 
-        // Try ISO-8601 string (timestamp column)
+        // Try string — could be a numeric string ("1695000000000") or ISO-8601
         val str = obj.optString("last_seen", "").takeIf { it.isNotEmpty() } ?: return 0L
+
+        // Try parsing as a plain number first (bigint returned as string)
+        str.toLongOrNull()?.let { return it }
+
+        // Try ISO-8601 string (timestamp column)
         return try {
             val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
                 timeZone = TimeZone.getTimeZone("UTC")

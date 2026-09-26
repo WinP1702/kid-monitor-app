@@ -159,8 +159,8 @@ class SupabaseSignaling(
             })
             put("ref", refCounter.getAndIncrement().toString())
         }
-        webSocket?.send(msg.toString())
-        Log.d(TAG, "-> Broadcast: $event")
+        val sent = webSocket?.send(msg.toString()) ?: false
+        Log.d(TAG, "-> Broadcast: $event (sent=$sent)")
     }
 
     fun disconnect() {

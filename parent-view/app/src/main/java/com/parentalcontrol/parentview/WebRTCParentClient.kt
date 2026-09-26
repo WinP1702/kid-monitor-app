@@ -153,6 +153,7 @@ class WebRTCParentClient(
 
     // ─── Request stream from kid ──────────────────────────────────────
     private fun requestStream() {
+        isConnected = false
         pc?.close()
         pc = null
         updateStatus("Requesting stream...")
@@ -178,7 +179,12 @@ class WebRTCParentClient(
                     Log.d(TAG, "Offer received — creating answer")
                     updateStatus("Connecting...")
 
-                    if (pc == null) createPeerConnection()
+                    // Always create a fresh PeerConnection for each offer.
+                    // A stale/closed PC from a previous failed attempt would
+                    // silently reject setRemoteDescription.
+                    pc?.close()
+                    pc = null
+                    createPeerConnection()
 
                     val sdp = payload.optString("sdp")
                     pc?.setRemoteDescription(object : SdpObserver {

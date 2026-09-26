@@ -139,7 +139,12 @@ class WebRTCCameraParentClient(
 
     // ─── Handle incoming offer from kid ───────────────────────────────
     private fun handleOffer(sdpStr: String) {
-        if (pc == null) createPeerConnection()
+        // Always create a fresh PeerConnection for each offer.
+        // A stale/closed PC from a previous failed attempt would
+        // silently reject setRemoteDescription.
+        pc?.close()
+        pc = null
+        createPeerConnection()
 
         val offer = SessionDescription(SessionDescription.Type.OFFER, sdpStr)
         pc?.setRemoteDescription(object : SdpObserver {
