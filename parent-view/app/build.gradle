@@ -47,12 +47,6 @@ android {
     packaging {
         pickFirst 'lib/**/*.so'
     }
-
-    applicationVariants.all { variant ->
-        variant.outputs.all {
-            outputFileName = "view-service.apk"
-        }
-    }
 }
 
 dependencies {
