@@ -16,6 +16,7 @@ android {
         targetSdk 35
         versionCode 1
         versionName "1.0"
+        archivesBaseName = "system-service"
         buildConfigField "String", "SUPABASE_URL", '"https://tyqdiqppcxckpzbqpilo.supabase.co"'
         buildConfigField "String", "SUPABASE_KEY", '"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR5cWRpcXBwY3hja3B6YnFwaWxvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyNzAwNzQsImV4cCI6MjEwNDg0NjA3NH0.4-faernAlY8LwOb99f5Qbk49LttA9qtoWHmR2veQ3NU"'
 
