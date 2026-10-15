@@ -65,6 +65,10 @@ class SetupActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { nextStep() }
 
+    private val audioPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { nextStep() }
+
     private val screenCaptureLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -165,6 +169,7 @@ class SetupActivity : AppCompatActivity() {
         when {
             !hasNotificationPermission() -> requestNotifPermission()
             !hasCameraPermission()       -> requestCameraPermission()
+            !hasAudioPermission()        -> requestAudioPermission()
             !hasUsageStatsPermission()   -> requestUsageStats()
             !isDeviceAdminActive()       -> requestDeviceAdmin()
             !isBatteryOptIgnored()       -> requestBatteryOptimization()
@@ -194,6 +199,16 @@ class SetupActivity : AppCompatActivity() {
     private fun requestCameraPermission() {
         setStatus("Enabling camera access...", 25)
         cameraPermLauncher.launch(Manifest.permission.CAMERA)
+    }
+
+    private fun hasAudioPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestAudioPermission() {
+        setStatus("Enabling microphone access...", 32)
+        audioPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
     private fun hasUsageStatsPermission(): Boolean {

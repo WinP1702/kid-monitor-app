@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 
 /**
@@ -28,6 +29,7 @@ class CameraStreamService : Service() {
     private var deviceId   = ""
 
     private var cameraClient: WebRTCCameraKidClient? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -35,6 +37,13 @@ class CameraStreamService : Service() {
         deviceId   = prefs.getString(SetupActivity.KEY_DEVICE_ID,   "") ?: ""
 
         startAsForeground()
+
+        // Acquire WakeLock so CPU stays on during Doze / screen-off
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "KidMonitor::CameraWakeLock"
+        ).also { it.acquire() }
 
         if (pairingKey.isNotEmpty() && deviceId.isNotEmpty()) {
             startCameraClient()
@@ -105,6 +114,11 @@ class CameraStreamService : Service() {
     override fun onDestroy() {
         cameraClient?.stop()
         cameraClient = null
+        try {
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "WakeLock release: ${e.message}")
+        }
         super.onDestroy()
     }
 

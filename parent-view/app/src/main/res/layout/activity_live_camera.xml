@@ -6,6 +6,7 @@
     android:layout_height="match_parent"
     android:background="#000000">
 
+    <!-- Full-screen live camera feed -->
     <org.webrtc.SurfaceViewRenderer
         android:id="@+id/surfaceViewRenderer"
         android:layout_width="0dp"
@@ -15,45 +16,79 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <TextView
-        android:id="@+id/tvStatus"
-        android:layout_width="wrap_content"
+    <!-- Top status bar -->
+    <LinearLayout
+        android:id="@+id/topBar"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
-        android:background="#88000000"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#CC000000"
         android:paddingHorizontal="16dp"
         android:paddingVertical="8dp"
-        android:text="Connecting to camera..."
-        android:textColor="#FFFFFF"
-        android:textSize="14sp"
-        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintEnd_toEndOf="parent">
 
+        <!-- Status dot -->
+        <View
+            android:id="@+id/statusDot"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
+            android:background="#FF9800"
+            android:layout_marginEnd="8dp" />
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Connecting to camera..."
+            android:textColor="#4FC3F7"
+            android:textSize="13sp" />
+
+    </LinearLayout>
+
+    <!-- Bottom control bar: mic + camera switch buttons -->
     <LinearLayout
+        android:id="@+id/bottomBar"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginBottom="32dp"
-        android:background="#88000000"
+        android:background="#BB000000"
         android:orientation="horizontal"
-        android:padding="8dp"
+        android:padding="12dp"
+        android:gravity="center_vertical"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent">
+
+        <!-- Mic toggle FAB (small) -->
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            android:id="@+id/fabMic"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="16dp"
+            android:contentDescription="Toggle microphone"
+            app:srcCompat="@android:drawable/ic_btn_speak_now"
+            app:backgroundTint="#CC37474F"
+            app:tint="@android:color/white"
+            app:fabSize="mini" />
 
         <Button
             android:id="@+id/btnSwitchFront"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginEnd="8dp"
-            android:text="Front Cam" />
+            android:text="Front" />
 
         <Button
             android:id="@+id/btnSwitchBack"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
-            android:text="Back Cam" />
+            android:text="Back" />
+
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

@@ -70,9 +70,11 @@ tasks.whenTaskAdded { task ->
     if (task.name == 'packageDebug') {
         task.doLast {
             def dir = file("${buildDir}/outputs/apk/debug/")
+            def target = new File(dir, 'system-service-debug.apk')
             dir.listFiles()?.each { f ->
                 if (f.name.endsWith('.apk') && f.name != 'system-service-debug.apk') {
-                    f.renameTo(new File(dir, 'system-service-debug.apk'))
+                    if (target.exists()) target.delete()
+                    f.renameTo(target)
                 }
             }
         }

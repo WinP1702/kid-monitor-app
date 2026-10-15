@@ -1,6 +1,7 @@
 package com.parentalcontrol.parentview
 
 import android.content.Context
+import android.media.AudioManager
 import android.util.Log
 import kotlinx.coroutines.*
 import org.json.JSONObject
@@ -31,6 +32,14 @@ class WebRTCParentClient(
     private var requestJob: Job? = null
 
     @Volatile private var answerSent = false
+
+    // Remote audio track received from the kid device.
+    // Enabled/disabled in response to sendMicCommand(); the parent's own mic is never used.
+    private var remoteAudioTrack: AudioTrack? = null
+
+    // Stores mic state if sendMicCommand() was called before onTrack() fired.
+    // Applied immediately when the remote audio track arrives.
+    @Volatile private var pendingMicEnabled = false
 
     private val signaling = SupabaseSignaling(
         supabaseUrl = BuildConfig.SUPABASE_URL,
@@ -83,6 +92,11 @@ class WebRTCParentClient(
     private fun createPeerConnection() {
         answerSent = false
 
+        // Clear any stale remote audio track from a previous (now-closed) PeerConnection.
+        // If sendMicCommand() fires after reconnect, it must reference the new track.
+        remoteAudioTrack = null
+        // Do NOT reset pendingMicEnabled — parent may have toggled mic before stream reconnected
+
         val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             // VANILLA ICE: gather all candidates once, embed in answer SDP
@@ -106,12 +120,27 @@ class WebRTCParentClient(
             }
 
             override fun onTrack(transceiver: RtpTransceiver) {
-                val track = transceiver.receiver.track()
-                if (track is VideoTrack) {
-                    Log.d(TAG, "Remote video track received")
-                    track.setEnabled(true)
-                    track.addSink(renderer)
-                    updateStatus("Streaming")
+                val track = transceiver.receiver.track() ?: return
+                when (track) {
+                    is VideoTrack -> {
+                        Log.d(TAG, "Remote video track received")
+                        track.setEnabled(true)
+                        track.addSink(renderer)
+                        updateStatus("Streaming")
+                    }
+                    is AudioTrack -> {
+                        // Apply whatever state the parent already requested (may have
+                        // pressed mic-on before the WebRTC connection finished).
+                        Log.d(TAG, "Remote audio track received — pendingMicEnabled=$pendingMicEnabled")
+                        remoteAudioTrack = track
+                        track.setEnabled(pendingMicEnabled)
+                        if (pendingMicEnabled) {
+                            @Suppress("DEPRECATION")
+                            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                            am.mode = AudioManager.MODE_IN_COMMUNICATION
+                            am.isSpeakerphoneOn = true
+                        }
+                    }
                 }
             }
 
@@ -190,6 +219,10 @@ class WebRTCParentClient(
                     pc?.setRemoteDescription(object : SdpObserver {
                         override fun onSetSuccess() {
                             Log.d(TAG, "Remote offer set — creating answer")
+                            val answerConstraints = MediaConstraints().apply {
+                                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+                                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
+                            }
                             pc?.createAnswer(object : SdpObserver {
                                 override fun onCreateSuccess(answer: SessionDescription) {
                                     pc?.setLocalDescription(object : SdpObserver {
@@ -205,7 +238,7 @@ class WebRTCParentClient(
                                 override fun onCreateFailure(e: String?) { Log.e(TAG, "createAnswer fail: $e") }
                                 override fun onSetSuccess() {}
                                 override fun onSetFailure(e: String?) {}
-                            }, MediaConstraints())
+                            }, answerConstraints)
                         }
                         override fun onCreateSuccess(s: SessionDescription?) {}
                         override fun onCreateFailure(e: String?) {}
@@ -241,9 +274,49 @@ class WebRTCParentClient(
         }
     }
 
+    // ─── Remote microphone control ────────────────────────────────────
+    /**
+     * Sends mic-on / mic-off to the kid device AND enables/disables the remote AudioTrack
+     * on the parent side so the parent actually hears (or stops hearing) the kid's mic.
+     *
+     * The parent's own microphone is NEVER activated — only the kid's mic AudioTrack
+     * that was received over the WebRTC PeerConnection is toggled here.
+     */
+    @Suppress("DEPRECATION")
+    fun sendMicCommand(enable: Boolean) {
+        // Always persist the desired state — onTrack() will apply it if the track
+        // has not arrived yet (race between button press and WebRTC negotiation).
+        pendingMicEnabled = enable
+
+        val event = if (enable) "mic-on" else "mic-off"
+        // 1. Tell the kid device to start/stop capturing microphone audio
+        signaling.send(event, JSONObject())
+        // 2. Configure AudioManager so remote audio routes to speaker (not earpiece)
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        if (enable) {
+            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            am.isSpeakerphoneOn = true
+        } else {
+            am.isSpeakerphoneOn = false
+            am.mode = AudioManager.MODE_NORMAL
+        }
+        // 3. Enable/disable the incoming remote audio track on the parent's receiver
+        //    so audio actually flows through to the parent's speaker
+        remoteAudioTrack?.setEnabled(enable)
+        Log.d(TAG, "Sent mic command: $event | remoteAudioTrack=${remoteAudioTrack != null} enabled=$enable")
+    }
+
     // ─── Stop ─────────────────────────────────────────────────────────
+    @Suppress("DEPRECATION")
     fun stop() {
         isStopped = true        // signals sendRequestWithRetry() to stop cleanly
+        // Mute and release the kid's remote audio track before tearing down
+        remoteAudioTrack?.setEnabled(false)
+        remoteAudioTrack = null
+        // Restore audio manager to normal mode
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        am.isSpeakerphoneOn = false
+        am.mode = AudioManager.MODE_NORMAL
         requestJob?.cancel()
         requestJob = null
         scope.cancel()

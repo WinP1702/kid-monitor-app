@@ -51,6 +51,23 @@
 
     </LinearLayout>
 
+    <!-- Mic FAB — listen to kid's microphone; visible only while streaming -->
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fabMic"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentEnd="true"
+        android:layout_alignParentBottom="true"
+        android:layout_marginEnd="88dp"
+        android:layout_marginBottom="52dp"
+        android:contentDescription="Toggle microphone"
+        android:visibility="gone"
+        app:srcCompat="@android:drawable/ic_btn_speak_now"
+        app:backgroundTint="#CC37474F"
+        app:tint="@android:color/white"
+        app:fabSize="normal"
+        xmlns:app="http://schemas.android.com/apk/res-auto" />
+
     <!-- Screenshot FAB — visible only while streaming -->
     <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/fabScreenshot"

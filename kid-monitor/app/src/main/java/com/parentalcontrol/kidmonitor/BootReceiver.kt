@@ -9,13 +9,10 @@ import android.os.Build
  * Listens for:
  *  - BOOT_COMPLETED / LOCKED_BOOT_COMPLETED → restart services after device reboot
  *  - MY_PACKAGE_REPLACED → restart services after APK update
- *    (Android 10+ grants background-activity-launch exemption for this action)
  *  - USER_PRESENT → screen unlocked; restart services if battery optimization killed them
  *  - Manufacturer boot actions (MIUI, Huawei, HTC QuickBoot)
  *
- * Screen share requires a fresh MediaProjection grant on every restart,
- * so we launch ProjectionRequestActivity (transparent) to silently re-ask.
- * CameraStreamService restarts automatically (reads prefs, no permission needed).
+ * Also starts the AlarmManager watchdog so it fires every 4 minutes even overnight.
  */
 class BootReceiver : BroadcastReceiver() {
 
@@ -40,23 +37,32 @@ class BootReceiver : BroadcastReceiver() {
         // Always restart camera service — no special permission needed, reads from prefs
         CameraStreamService.start(context)
 
-        // For USER_PRESENT (screen unlock), only restart screen service if it is not running.
-        // Avoids re-prompting for MediaProjection every time the user unlocks their phone.
+        // Kick off the watchdog so it fires every 4 min and keeps services alive long-term
+        MonitorService.scheduleWatchdog(context)
+
+        // For USER_PRESENT (screen unlock), only show the projection dialog if MonitorService
+        // is definitively not running. MonitorService.isRunning is reliable within a process
+        // lifetime; after process death it resets to false — which is exactly what we want.
         if (isUnlocked) {
             if (!MonitorService.isRunning) {
-                val trampolineIntent = Intent(context, ProjectionRequestActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(trampolineIntent)
+                launchProjectionActivity(context)
             }
             return
         }
 
         // Boot / update: always request fresh MediaProjection grant.
         // BOOT_COMPLETED and MY_PACKAGE_REPLACED have background-activity-launch exemption.
-        val trampolineIntent = Intent(context, ProjectionRequestActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        launchProjectionActivity(context)
+    }
+
+    private fun launchProjectionActivity(context: Context) {
+        try {
+            val trampolineIntent = Intent(context, ProjectionRequestActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(trampolineIntent)
+        } catch (e: Exception) {
+            android.util.Log.e("BootReceiver", "Failed to launch ProjectionRequestActivity: ${e.message}")
         }
-        context.startActivity(trampolineIntent)
     }
 }

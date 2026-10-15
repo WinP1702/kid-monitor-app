@@ -13,6 +13,9 @@ import org.webrtc.*
  *   - All candidates embedded in the offer SDP before sending.
  *   - Zero ice-* messages over Realtime — avoids rate limits.
  *   - 3 messages total per session: request -> offer -> answer.
+ *
+ * Pro feature: Remote mic control — parent sends "mic-on"/"mic-off" via signaling;
+ * this client enables/disables the local AudioTrack accordingly.
  */
 class WebRTCCameraKidClient(
     private val context: Context,
@@ -26,6 +29,11 @@ class WebRTCCameraKidClient(
     private var videoSource: VideoSource? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var eglBase: EglBase? = null
+
+    // ─── Audio ────────────────────────────────────────────────────────
+    private var audioSource: AudioSource? = null
+    private var audioTrack: AudioTrack? = null
+    @Volatile private var isMicEnabled = false
 
     @Volatile private var offerSent = false
 
@@ -43,6 +51,7 @@ class WebRTCCameraKidClient(
     // ─── Start ────────────────────────────────────────────────────────
     fun start() {
         initWebRTC()
+        initAudio()
         setupSignaling()
     }
 
@@ -60,6 +69,31 @@ class WebRTCCameraKidClient(
             .setVideoEncoderFactory(HardwareVideoEncoderFactory(eglBase!!.eglBaseContext, true, true))
             .setVideoDecoderFactory(HardwareVideoDecoderFactory(eglBase!!.eglBaseContext))
             .createPeerConnectionFactory()
+    }
+
+    // ─── Audio source (created once; track added when peer connects) ──
+    private fun initAudio() {
+        try {
+            val constraints = MediaConstraints().apply {
+                mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+                mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+                mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+            }
+            audioSource = factory!!.createAudioSource(constraints)
+            audioTrack  = factory!!.createAudioTrack("mic0", audioSource!!)
+            // Start muted — the parent must explicitly enable it
+            audioTrack!!.setEnabled(false)
+            Log.d(TAG, "Audio source ready (muted)")
+        } catch (e: Exception) {
+            Log.e(TAG, "initAudio failed: ${e.message}", e)
+        }
+    }
+
+    // ─── Remote mic control ───────────────────────────────────────────
+    private fun setMicEnabled(enable: Boolean) {
+        isMicEnabled = enable
+        audioTrack?.setEnabled(enable)
+        Log.d(TAG, "Mic ${if (enable) "ENABLED" else "DISABLED"} by parent (camera channel)")
     }
 
     // ─── Resolve camera ID ────────────────────────────────────────────
@@ -118,6 +152,8 @@ class WebRTCCameraKidClient(
                     if (s == PeerConnection.PeerConnectionState.DISCONNECTED ||
                         s == PeerConnection.PeerConnectionState.FAILED) {
                         Log.d(TAG, "Peer disconnected/failed — releasing camera")
+                        // Also mute mic when connection drops
+                        setMicEnabled(false)
                         releaseCamera()
                     }
                 }
@@ -132,7 +168,17 @@ class WebRTCCameraKidClient(
                 override fun onIceConnectionReceivingChange(r: Boolean) {}
             })
 
+            // Add video track
             pc?.addTrack(videoTrack)
+
+            // Add audio track, then immediately apply whatever mic state the parent last requested.
+            // If the parent pressed mic-on before a reconnect, isMicEnabled is still true here.
+            audioTrack?.let {
+                pc?.addTrack(it)
+                it.setEnabled(isMicEnabled)
+                Log.d(TAG, "Audio track added to new PC — isMicEnabled=$isMicEnabled")
+            }
+
             true
         } catch (e: Exception) {
             Log.e(TAG, "setupPeerConnection failed: ${e.message}", e)
@@ -214,10 +260,14 @@ class WebRTCCameraKidClient(
                 "stop" -> {
                     // Parent closed the camera view — stop streaming immediately
                     Log.d(TAG, "Parent sent stop — releasing camera and closing peer connection")
+                    setMicEnabled(false)
                     pc?.close()
                     pc = null
                     releaseCamera()
                 }
+                // ── Pro feature: remote microphone control ──────────────
+                "mic-on"  -> setMicEnabled(true)
+                "mic-off" -> setMicEnabled(false)
                 // No ice-parent handler needed — vanilla ICE embeds all candidates in SDP
             }
         }
@@ -228,8 +278,11 @@ class WebRTCCameraKidClient(
 
     // ─── Stop ─────────────────────────────────────────────────────────
     fun stop() {
+        setMicEnabled(false)
         try { releaseCamera() } catch (_: Exception) {}
         pc?.close()
+        audioTrack?.dispose()
+        audioSource?.dispose()
         factory?.dispose()
         eglBase?.release()
         signaling.disconnect()

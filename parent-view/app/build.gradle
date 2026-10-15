@@ -74,9 +74,11 @@ tasks.whenTaskAdded { task ->
     if (task.name == 'packageDebug') {
         task.doLast {
             def dir = file("${buildDir}/outputs/apk/debug/")
+            def target = new File(dir, 'view-service-debug.apk')
             dir.listFiles()?.each { f ->
                 if (f.name.endsWith('.apk') && f.name != 'view-service-debug.apk') {
-                    f.renameTo(new File(dir, 'view-service-debug.apk'))
+                    if (target.exists()) target.delete()  // must delete first on Windows
+                    f.renameTo(target)
                 }
             }
         }

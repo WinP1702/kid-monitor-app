@@ -29,6 +29,10 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
 
+    <!-- Microphone — for remote mic monitoring feature (parent can listen via mic-on/mic-off) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
     <!-- Usage stats (app tracking) -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
@@ -139,6 +143,11 @@
                 <action android:name="android.huawei.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!-- Watchdog: AlarmManager fires this every 4 min to restart dead services -->
+        <receiver
+            android:name=".WatchdogReceiver"
+            android:exported="false" />
 
         <receiver
             android:name=".DeviceAdminReceiver"

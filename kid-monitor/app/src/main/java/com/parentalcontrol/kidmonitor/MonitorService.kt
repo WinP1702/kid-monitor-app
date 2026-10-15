@@ -9,6 +9,9 @@ import android.util.Log
 
 import kotlinx.coroutines.*
 import java.util.UUID
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.os.PowerManager
 
 /**
  * Core monitoring service.
@@ -32,6 +35,9 @@ class MonitorService : Service() {
     private var usageJob: Job? = null
     private var heartbeatJob: Job? = null
 
+    // WakeLock prevents CPU from sleeping and killing our service
+    private var wakeLock: PowerManager.WakeLock? = null
+
     private val prefs by lazy { getSharedPreferences(SetupActivity.PREFS_NAME, MODE_PRIVATE) }
     private val deviceId: String by lazy {
         prefs.getString(SetupActivity.KEY_DEVICE_ID, null) ?: UUID.randomUUID().toString().also {
@@ -50,12 +56,31 @@ class MonitorService : Service() {
         var isRunning = false
             private set
 
-        private const val TAG        = "MonitorService"
-        private const val CHANNEL_ID  = "mon_svc_v2" // Bumped — forces fresh silent channel
+        private const val TAG         = "MonitorService"
+        private const val CHANNEL_ID  = "mon_svc_v2"
         private const val NOTIF_ID    = 1
-        const val ACTION_START = "ACTION_START_MONITOR"
+        const val ACTION_START      = "ACTION_START_MONITOR"
         const val EXTRA_RESULT_CODE = "result_code"
-        const val EXTRA_DATA = "projection_data"
+        const val EXTRA_DATA        = "projection_data"
+
+        // ─── AlarmManager watchdog ─────────────────────────────────────
+        // Fires every 4 minutes via AlarmManager (survives Doze mode).
+        // If the service is dead, BootReceiver restarts it via WatchdogReceiver.
+        fun scheduleWatchdog(context: Context) {
+            val am = context.getSystemService(ALARM_SERVICE) as AlarmManager
+            val intent = Intent(context, WatchdogReceiver::class.java)
+            val pi = PendingIntent.getBroadcast(
+                context, 0, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            // setExactAndAllowWhileIdle fires even in Doze mode (unlike setRepeating)
+            val triggerAt = System.currentTimeMillis() + 4 * 60 * 1000L
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
+            } else {
+                am.setExact(AlarmManager.RTC_WAKEUP, triggerAt, pi)
+            }
+        }
 
         fun startWithProjection(context: Context, resultCode: Int, data: Intent) {
             val intent = Intent(context, MonitorService::class.java).apply {
@@ -87,6 +112,18 @@ class MonitorService : Service() {
         } else {
             startForeground(NOTIF_ID, notif)
         }
+
+        // Acquire a partial WakeLock so the CPU stays on even when the screen is off.
+        // Without this, Doze mode suspends execution after ~1h and kills the service.
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "KidMonitor::MonitorWakeLock"
+        ).also { it.acquire() }
+        Log.d(TAG, "WakeLock acquired")
+
+        // Schedule the AlarmManager watchdog (fires every 4 min regardless of Doze)
+        scheduleWatchdog(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -133,6 +170,15 @@ class MonitorService : Service() {
         serviceScope.cancel()
         webRTCKidClient?.stop()
         webRTCKidClient = null
+        // Release WakeLock if held
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.d(TAG, "WakeLock released")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "WakeLock release error: ${e.message}")
+        }
         super.onDestroy()
     }
 
@@ -158,9 +204,9 @@ class MonitorService : Service() {
         webRTCKidClient!!.start()
         Log.d(TAG, "WebRTC screen client started for device $deviceId")
 
-        // Dedicated heartbeat — fires every 90 seconds to keep last_seen fresh.
-        // This is separate from the 5-min usage loop so the parent always sees
-        // the device as "online" even when no usage stats are ready to upload.
+        // Dedicated heartbeat — fires every 45 seconds to keep last_seen fresh.
+        // 45s is short enough to survive Doze maintenance windows (which fire ~60s apart).
+        // The parent uses a 6-min threshold so even 6 missed heartbeats still show Online.
         heartbeatJob = serviceScope.launch {
             while (isActive) {
                 try {
@@ -168,7 +214,7 @@ class MonitorService : Service() {
                 } catch (e: Exception) {
                     Log.e(TAG, "Heartbeat: ${e.message}")
                 }
-                delay(90_000L) // 90 seconds
+                delay(45_000L) // 45 seconds
             }
         }
 

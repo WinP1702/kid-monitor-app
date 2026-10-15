@@ -17,6 +17,9 @@ import org.webrtc.*
  *   - Avoids Supabase "too many messages per second" rate limit.
  *   - 3 total messages per session: request → offer → answer.
  *
+ * Pro feature: Remote mic control — parent sends "mic-on"/"mic-off" via signaling;
+ * this client enables/disables the local AudioTrack accordingly.
+ *
  * Signaling channel: "screen-{pairingKey}-{deviceId}"
  */
 class WebRTCKidClient(
@@ -33,6 +36,11 @@ class WebRTCKidClient(
     private var videoTrack: VideoTrack? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var eglBase: EglBase? = null
+
+    // ─── Audio ────────────────────────────────────────────────────────
+    private var audioSource: AudioSource? = null
+    private var audioTrack: AudioTrack? = null
+    @Volatile private var isMicEnabled = false
 
     // Guards against sending the offer more than once per gathering cycle
     @Volatile private var offerSent = false
@@ -53,6 +61,7 @@ class WebRTCKidClient(
     fun start() {
         initWebRTC()
         initCapturer()
+        initAudio()
         setupSignaling()
     }
 
@@ -76,6 +85,31 @@ class WebRTCKidClient(
             .createPeerConnectionFactory()
 
         Log.d(TAG, "PeerConnectionFactory created")
+    }
+
+    // ─── Audio source (created once; track added when peer connects) ──
+    private fun initAudio() {
+        try {
+            val constraints = MediaConstraints().apply {
+                mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+                mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+                mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+            }
+            audioSource = factory!!.createAudioSource(constraints)
+            audioTrack  = factory!!.createAudioTrack("mic0", audioSource!!)
+            // Start muted — the parent must explicitly enable it
+            audioTrack!!.setEnabled(false)
+            Log.d(TAG, "Audio source ready (muted)")
+        } catch (e: Exception) {
+            Log.e(TAG, "initAudio failed: ${e.message}", e)
+        }
+    }
+
+    // ─── Remote mic control (called from signaling handler) ──────────
+    private fun setMicEnabled(enable: Boolean) {
+        isMicEnabled = enable
+        audioTrack?.setEnabled(enable)
+        Log.d(TAG, "Mic ${if (enable) "ENABLED" else "DISABLED"} by parent")
     }
 
     // ─── Eager screen capturer initialization ────────────────────────
@@ -154,7 +188,17 @@ class WebRTCKidClient(
             override fun onIceConnectionReceivingChange(r: Boolean) {}
         })
 
+        // Add video track
         pc?.addTrack(videoTrack!!)
+
+        // Add audio track, then immediately apply whatever mic state the parent last requested.
+        // If the parent pressed mic-on before a reconnect, isMicEnabled is still true here.
+        audioTrack?.let {
+            pc?.addTrack(it)
+            it.setEnabled(isMicEnabled)
+            Log.d(TAG, "Audio track added to new PC — isMicEnabled=$isMicEnabled")
+        }
+
         Log.d(TAG, "PeerConnection created — creating offer")
 
         pc?.createOffer(object : SdpObserver {
@@ -196,6 +240,9 @@ class WebRTCKidClient(
                         }, SessionDescription(SessionDescription.Type.ANSWER, sdp))
                     }
                 }
+                // ── Pro feature: remote microphone control ──────────────
+                "mic-on"  -> setMicEnabled(true)
+                "mic-off" -> setMicEnabled(false)
                 // No ice-parent handler needed — vanilla ICE embeds all candidates in SDP
             }
         }
@@ -214,6 +261,8 @@ class WebRTCKidClient(
 
     // ─── Stop ─────────────────────────────────────────────────────────
     fun stop() {
+        // Ensure mic is disabled before tearing down
+        setMicEnabled(false)
         pc?.close()
         pc = null
         try {
@@ -221,6 +270,8 @@ class WebRTCKidClient(
             capturer?.dispose()
         } catch (e: Exception) { Log.w(TAG, "capturer stop: ${e.message}") }
         videoTrack?.dispose()
+        audioTrack?.dispose()
+        audioSource?.dispose()
         surfaceTextureHelper?.dispose()
         factory?.dispose()
         eglBase?.release()

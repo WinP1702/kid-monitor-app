@@ -3,8 +3,6 @@ package com.parentalcontrol.parentview
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.graphics.PixelFormat
-import android.media.Image
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -22,12 +20,16 @@ import java.util.*
  * Live Screen activity — shows real-time WebRTC video stream from the child device.
  * Architecture: Supabase Realtime signaling → WebRTC P2P video (no server relay).
  * Latency: ~100–500ms  |  Quality: 1080p@30fps  |  Cost: $0 (P2P, no server bandwidth)
+ *
+ * Pro feature: Mic button — parent can remotely activate the kid's microphone to listen in.
+ * Sends "mic-on" / "mic-off" over the existing signaling channel.
  */
 class LiveScreenActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityLiveScreenBinding
     private var webRTCClient: WebRTCParentClient? = null
     private var isStreaming = false
+    private var isMicActive = false
 
     private var deviceId: String = ""
     private var deviceName: String = ""
@@ -56,6 +58,65 @@ class LiveScreenActivity : AppCompatActivity() {
 
         // Screenshot FAB
         binding.fabScreenshot.setOnClickListener { takeScreenshot() }
+
+        // Mic FAB — toggle remote microphone on/off
+        binding.fabMic.setOnClickListener { toggleMic() }
+    }
+
+    // ─── Mic toggle ───────────────────────────────────────────────────
+    private fun toggleMic() {
+        if (!isStreaming) {
+            Toast.makeText(this, "Connect to the device first", Toast.LENGTH_SHORT).show()
+            return
+        }
+        isMicActive = !isMicActive
+        updateMicButton()
+
+        // Animate the FAB for tactile feedback
+        binding.fabMic.animate()
+            .scaleX(0.75f).scaleY(0.75f).setDuration(80)
+            .withEndAction {
+                binding.fabMic.animate().scaleX(1f).scaleY(1f).setDuration(80).start()
+            }.start()
+
+        if (isMicActive) {
+            webRTCClient?.sendMicCommand(true)
+            Toast.makeText(this, "🎙️ Microphone ON — listening...", Toast.LENGTH_SHORT).show()
+        } else {
+            webRTCClient?.sendMicCommand(false)
+            Toast.makeText(this, "🔇 Microphone OFF", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun updateMicButton() {
+        if (isMicActive) {
+            // Active: bright red pulsing to signal listening
+            binding.fabMic.backgroundTintList =
+                android.content.res.ColorStateList.valueOf(Color.parseColor("#CCE53935"))
+            binding.fabMic.setImageResource(android.R.drawable.ic_btn_speak_now)
+            // Pulse animation while mic is active
+            pulseAnimation()
+        } else {
+            // Idle: dark grey
+            binding.fabMic.backgroundTintList =
+                android.content.res.ColorStateList.valueOf(Color.parseColor("#CC37474F"))
+            binding.fabMic.setImageResource(android.R.drawable.ic_btn_speak_now)
+            binding.fabMic.clearAnimation()
+        }
+    }
+
+    private fun pulseAnimation() {
+        if (!isMicActive) return
+        binding.fabMic.animate()
+            .scaleX(1.15f).scaleY(1.15f).setDuration(600)
+            .withEndAction {
+                if (isMicActive) {
+                    binding.fabMic.animate()
+                        .scaleX(1f).scaleY(1f).setDuration(600)
+                        .withEndAction { pulseAnimation() }
+                        .start()
+                }
+            }.start()
     }
 
     private fun startWebRTC() {
@@ -79,15 +140,19 @@ class LiveScreenActivity : AppCompatActivity() {
                         .alpha(0f).setDuration(500)
                         .withEndAction { binding.waitingOverlay.visibility = View.GONE }
                         .start()
-                    // Show screenshot button with a pop animation
-                    binding.fabScreenshot.visibility = View.VISIBLE
-                    binding.fabScreenshot.scaleX = 0f
-                    binding.fabScreenshot.scaleY = 0f
-                    binding.fabScreenshot.animate().scaleX(1f).scaleY(1f).setDuration(300).start()
+                    // Show FABs with a pop animation
+                    showFab(binding.fabScreenshot)
+                    showFab(binding.fabMic)
 
                 } else if (!nowStreaming && isStreaming &&
                     (status.contains("Disconnected") || status.contains("failed"))) {
                     isStreaming = false
+                    // Turn off mic if active when stream drops
+                    if (isMicActive) {
+                        isMicActive = false
+                        updateMicButton()
+                        webRTCClient?.sendMicCommand(false)
+                    }
                     // Show overlay again on disconnect
                     binding.waitingOverlay.visibility = View.VISIBLE
                     binding.waitingOverlay.alpha = 1f
@@ -95,11 +160,19 @@ class LiveScreenActivity : AppCompatActivity() {
                     binding.tvWaitingSubtitle.text = "Attempting to reconnect..."
                     binding.progressBar.visibility = View.VISIBLE
                     binding.fabScreenshot.visibility = View.GONE
+                    binding.fabMic.visibility = View.GONE
                 }
             }
         }
 
         webRTCClient!!.start()
+    }
+
+    private fun showFab(fab: com.google.android.material.floatingactionbutton.FloatingActionButton) {
+        fab.visibility = View.VISIBLE
+        fab.scaleX = 0f
+        fab.scaleY = 0f
+        fab.animate().scaleX(1f).scaleY(1f).setDuration(300).start()
     }
 
     // ─── Screenshot ───────────────────────────────────────────────────
@@ -192,6 +265,10 @@ class LiveScreenActivity : AppCompatActivity() {
     override fun onSupportNavigateUp(): Boolean { finish(); return true }
 
     override fun onDestroy() {
+        // Always turn off mic when leaving
+        if (isMicActive) {
+            webRTCClient?.sendMicCommand(false)
+        }
         webRTCClient?.stop()
         webRTCClient = null
         super.onDestroy()

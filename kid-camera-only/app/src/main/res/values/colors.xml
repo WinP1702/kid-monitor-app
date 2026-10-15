@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark charcoal — looks like a system utility/tools app, not a monitoring app -->
+    <color name="ic_launcher_background">#2D2D2D</color>
+</resources>

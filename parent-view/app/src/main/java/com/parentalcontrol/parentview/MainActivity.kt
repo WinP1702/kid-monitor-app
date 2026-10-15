@@ -124,7 +124,7 @@ class MainActivity : AppCompatActivity() {
         pollJob = lifecycleScope.launch {
             while (isActive) {
                 fetchAllKeys()
-                delay(15_000L) // refresh every 15 seconds
+                delay(10_000L) // refresh every 10 seconds for responsive online/offline indicator
             }
         }
     }
@@ -453,15 +453,17 @@ class DeviceAdapter(
         holder.tvName.text = item.deviceName
 
         val ageMs   = System.currentTimeMillis() - item.lastSeenMs
-        val ageMins = java.util.concurrent.TimeUnit.MILLISECONDS.toMinutes(ageMs)
-        // Kid sends a heartbeat every 90 seconds. Use a 6-min threshold so the
-        // device stays "Online" even if 3-4 heartbeats in a row are delayed.
-        val isOnline = ageMins < 6
+        val ageSecs = ageMs / 1000
+        val ageMins = ageSecs / 60
+        // Heartbeat fires every 45s. Use 3-minute threshold:
+        // allows up to 4 missed heartbeats before showing offline.
+        val isOnline = ageMins < 3
 
         holder.tvLastSeen.text = when {
-            ageMins < 2  -> "🟢 Online now"
-            ageMins < 60 -> "🟡 ${ageMins}m ago"
-            else         -> "🔴 ${java.util.concurrent.TimeUnit.MILLISECONDS.toHours(ageMs)}h ago"
+            ageSecs < 10  -> "🟢 Online now"
+            ageSecs < 120 -> "🟢 ${ageSecs}s ago"
+            ageMins < 60  -> "🟡 ${ageMins}m ago"
+            else          -> "🔴 ${ageMins / 60}h ago"
         }
 
         holder.tvStatus.text = if (isOnline) "LIVE" else "OFFLINE"
